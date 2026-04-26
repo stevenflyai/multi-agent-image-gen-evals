@@ -1,0 +1,17 @@
+[project]
+name = "evalsimagegen"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.97.0",
+    "google-genai>=1.73.1",
+    "openai>=2.32.0",
+    "pillow>=12.2.0",
+    "plotly>=6.7.0",
+    "pydantic>=2.13.3",
+    "pytest>=9.0.3",
+    "python-dotenv>=1.2.2",
+    "streamlit>=1.56.0",
+]
