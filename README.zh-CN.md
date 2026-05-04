@@ -1,13 +1,14 @@
-# Image Eval Pipeline
+# Multi Agents Image Generation Evals Pipeline
 
 语言版本：[English](README.md) | [简体中文](README.zh-CN.md)
 
-这是一个用于比较 AI 图像生成模型的跨模型对抗式图像评测系统。应用会把同一个 prompt 同时发送给两个图像模型，用统一 rubric 评估两张输出图，经过多轮独立 critique/revision，在风险较高时可暂停进入 human-in-the-loop (HIL) 人工裁决，并把每次运行的完整过程归档，便于后续复盘。
+Multi Agents Image Generation Evals Pipeline 是一个用于评估和比较 AI 图像生成模型的 Multiple Agent System。应用会把同一个 prompt 同时发送给两个图像生成 agent，再由独立 evaluation agent 按统一 rubric 评估两张输出图，并通过 critique agent 与 revision agent 多轮挑战和修正评分；当风险较高时，可暂停进入 human-in-the-loop (HIL) 人工裁决，并把每次运行的完整过程归档，便于后续复盘。
 
-主入口是一个中英双语 Streamlit Dashboard，支持并排看图、进度和 Activity Log、分数可视化、critique transcript、HIL 审核控件、历史 run 加载、删除和重跑。
+主入口是一个用于操作多 agent workflow 的中英双语 Streamlit Dashboard，支持并排看图、进度和 Activity Log、分数可视化、critique transcript、HIL 审核控件、历史 run 加载、删除和重跑。
 
 ## 功能概览
 
+- 在一个可审计 workflow 中协调 generation、evaluation、critique、revision、gate 和 comparison agents。
 - 使用同一个 prompt 并行生成两张图片。
 - 基于 6 个维度的 1-10 分校准 rubric，对两张图片打分。
 - 使用独立 critique agent 发现评估中的错误、偏见、证据不足和分数不一致。

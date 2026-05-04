@@ -1,13 +1,14 @@
-# Image Eval Pipeline
+# Multi Agents Image Generation Evals Pipeline
 
 Languages: [English](README.md) | [简体中文](README.zh-CN.md)
 
-Cross-model adversarial image evaluation system for comparing AI image generators. The app sends one prompt to two image models, evaluates both outputs with a rubric, runs independent critique/revision rounds, optionally pauses for human-in-the-loop (HIL) review when risk is high, and archives every run for later inspection.
+Multi Agents Image Generation Evals Pipeline is a multiple agent system for evaluating and comparing AI image generation models. The app sends one prompt to two image-generation agents, uses a dedicated evaluation agent to score both outputs with a rubric, runs independent critique and revision agents to challenge the scores, optionally pauses for human-in-the-loop (HIL) review when risk is high, and archives every run for later inspection.
 
-The primary UI is a bilingual Streamlit dashboard with side-by-side images, progress/activity logs, score visualizations, critique transcripts, HIL review controls, historical run loading, delete, and rerun actions.
+The primary UI is a bilingual Streamlit dashboard for operating this multiple agent workflow, with side-by-side images, progress/activity logs, score visualizations, critique transcripts, HIL review controls, historical run loading, delete, and rerun actions.
 
 ## What It Does
 
+- Coordinates generation, evaluation, critique, revision, gate, and comparison agents in one auditable workflow.
 - Generates two images from the same prompt in parallel.
 - Scores both images across six dimensions on a calibrated 1-10 rubric.
 - Uses independent critique agents to find evaluator mistakes, bias, unsupported reasoning, and score inconsistencies.
@@ -64,7 +65,7 @@ The orchestrator is [pipeline.py](pipeline.py). Provider adapters are split acro
 
 ### Core Stages
 
-1. **Generation**: GPT Image-2 and Gemstevenlian2981@gmail.comini 3 Pro run in parallel with retry and timeout handling.
+1. **Generation**: GPT Image-2 and Gemini 3 Pro run in parallel with retry and timeout handling.
 2. **Evaluation**: Claude scores both images across six rubric dimensions and records evidence/confidence fields.
 3. **Gate 1**: A deterministic uncertainty/risk router checks margin risk, difficulty, evidence quality, confidence, and cross-dimension conflicts.
 4. **Critique round 1**: GPT-5.4 independently critiques the initial evaluation.
