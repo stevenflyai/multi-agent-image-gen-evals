@@ -66,6 +66,21 @@ def test_critique_response_valid():
     )
     assert len(cr.dimension_critiques) == 1
     assert cr.dimension_critiques[0].suggested_score_model_a == 7
+    # Default round/model values
+    assert cr.round == 1
+    assert cr.critic_model == ""
+
+
+def test_critique_response_with_round_and_model():
+    cr = CritiqueResponse(
+        overall_assessment="Round 2 review",
+        dimension_critiques=[],
+        bias_detection="None",
+        round=2,
+        critic_model="gemini-3.1-pro",
+    )
+    assert cr.round == 2
+    assert cr.critic_model == "gemini-3.1-pro"
 
 
 def test_revised_evaluation_valid():

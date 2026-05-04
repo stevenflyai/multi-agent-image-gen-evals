@@ -10,6 +10,7 @@ from schemas import (
     DimensionResult,
     RevisedEvaluation,
     ImageEvaluation,
+    MarginType,
 )
 
 
@@ -67,6 +68,10 @@ def determine_winner(
         else:
             overall = "draw"
 
+    largest_gap = max(abs(r.score_a - r.score_b) for r in dimension_results)
+    margin = _classify_margin(overall, a_won, b_won, largest_gap)
+    conflict_notes = _build_conflict_notes(dimension_results, overall)
+
     return ComparisonResult(
         prompt=prompt,
         model_a_name=revised.model_a.model_name,
@@ -77,4 +82,27 @@ def determine_winner(
         model_b_mean=round(mean_b, 2),
         model_a_dimensions_won=a_won,
         model_b_dimensions_won=b_won,
+        margin=margin,
+        conflict_notes=conflict_notes,
     )
+
+
+def _classify_margin(overall: str, a_won: int, b_won: int, largest_gap: int) -> MarginType:
+    if overall == "draw":
+        return "tie"
+    winner_dims = max(a_won, b_won)
+    loser_dims = min(a_won, b_won)
+    if winner_dims >= 4 and largest_gap >= 3:
+        return "decisive"
+    if winner_dims > loser_dims and largest_gap >= 2:
+        return "clear"
+    return "narrow"
+
+
+def _build_conflict_notes(dimension_results: list[DimensionResult], overall: str) -> str | None:
+    if overall == "draw":
+        return "Overall result is tied after score and largest-lead comparison."
+    split_winners = {result.winner for result in dimension_results if result.winner != "draw"}
+    if len(split_winners) > 1:
+        return "Dimensions split between both models; final winner depends on aggregate score and margin."
+    return None

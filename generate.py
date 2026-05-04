@@ -8,10 +8,14 @@ import base64
 import os
 from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
+from typing import Callable
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from google import genai
+
+from config import GEMINI_SAFETY_CATEGORIES, GEMINI_SAFETY_THRESHOLD, IMAGE_GEN_GEMINI_MODEL, IMAGE_GEN_GPT_MODEL, IMAGE_GEN_TIMEOUT
+from utils import retry_llm_call
 
 load_dotenv()
 
@@ -23,7 +27,7 @@ def generate_gpt_image(prompt: str, output_path: Path) -> Path:
         base_url=os.environ.get("OPENAI_BASE_URL"),
     )
     response = client.images.generate(
-        model="gpt-image-2",
+        model=IMAGE_GEN_GPT_MODEL,
         prompt=prompt,
         n=1,
         size="1024x1024",
@@ -33,7 +37,10 @@ def generate_gpt_image(prompt: str, output_path: Path) -> Path:
         img_bytes = base64.b64decode(image_data.b64_json)
     elif image_data.url:
         import httpx
-        img_bytes = httpx.get(image_data.url).content
+        url = image_data.url
+        if not url.startswith("https://"):
+            raise ValueError(f"Unexpected non-https URL from OpenAI: {url[:80]}")
+        img_bytes = httpx.get(url, timeout=30, follow_redirects=False).content
     else:
         raise ValueError("GPT Image-2 returned neither b64_json nor url")
 
@@ -42,12 +49,15 @@ def generate_gpt_image(prompt: str, output_path: Path) -> Path:
 
 
 def generate_gemini_image(prompt: str, output_path: Path) -> Path:
-    """Generate an image with Gemini 3 Pro and save to output_path."""
-    client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+    """Generate an image with Gemini 3 Pro via Vertex AI and save to output_path."""
+    client = genai.Client(vertexai=True, api_key=os.environ["GOOGLE_API_KEY"])
     response = client.models.generate_content(
-        model="gemini-3-pro-image-preview",
+        model=IMAGE_GEN_GEMINI_MODEL,
         contents=prompt,
-        config=genai.types.GenerateContentConfig(response_modalities=["IMAGE"]),
+        config=genai.types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            safety_settings=_gemini_safety_settings(),
+        ),
     )
     if not response.candidates or not response.candidates[0].content.parts:
         raise ValueError("Gemini 3 Pro returned no image")
@@ -60,7 +70,23 @@ def generate_gemini_image(prompt: str, output_path: Path) -> Path:
     raise ValueError("Gemini 3 Pro response contained no image data")
 
 
-def generate_images(prompt: str, run_dir: Path) -> dict[str, Path | Exception]:
+def _gemini_safety_settings() -> list[genai.types.SafetySetting]:
+    """Build Gemini safety settings from centralized config."""
+    threshold = getattr(genai.types.HarmBlockThreshold, GEMINI_SAFETY_THRESHOLD)
+    return [
+        genai.types.SafetySetting(
+            category=getattr(genai.types.HarmCategory, category),
+            threshold=threshold,
+        )
+        for category in GEMINI_SAFETY_CATEGORIES
+    ]
+
+
+def generate_images(
+    prompt: str,
+    run_dir: Path,
+    on_model_done: Callable[[str], None] | None = None,
+) -> dict[str, Path | Exception]:
     """Generate images from both models in parallel.
 
     Returns dict with 'gpt_image_2' and 'gemini_3_pro' keys.
@@ -72,14 +98,20 @@ def generate_images(prompt: str, run_dir: Path) -> dict[str, Path | Exception]:
 
     results: dict[str, Path | Exception] = {}
 
+    def _run(model_key: str, fn, path: Path):
+        result = retry_llm_call(lambda: fn(prompt, path))
+        if on_model_done:
+            on_model_done(model_key)
+        return result
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures: dict[str, Future] = {
-            "gpt_image_2": executor.submit(generate_gpt_image, prompt, gpt_path),
-            "gemini_3_pro": executor.submit(generate_gemini_image, prompt, gemini_path),
+            "gpt_image_2": executor.submit(_run, "gpt_image_2", generate_gpt_image, gpt_path),
+            "gemini_3_pro": executor.submit(_run, "gemini_3_pro", generate_gemini_image, gemini_path),
         }
         for model, future in futures.items():
             try:
-                results[model] = future.result(timeout=600)
+                results[model] = future.result(timeout=IMAGE_GEN_TIMEOUT)
             except Exception as e:
                 results[model] = e
 

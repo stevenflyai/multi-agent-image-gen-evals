@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.97.0",
     "google-genai>=1.73.1",
+    "httpx>=0.27.0",
     "openai>=2.32.0",
     "pillow>=12.2.0",
     "plotly>=6.7.0",
@@ -15,3 +16,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "streamlit>=1.56.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
