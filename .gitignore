@@ -15,6 +15,9 @@ wheels/
 # Generated outputs
 runs/
 
+# Local docs and design notes
+docs/
+
 # gstack
 .gstack/
 .gstack-screenshots/
