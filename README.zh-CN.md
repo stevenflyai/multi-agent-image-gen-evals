@@ -1,10 +1,10 @@
-# Multi Agents Image Generation Evals Pipeline
+# Multi-Agent Image Generation Evals Pipeline
 
 语言版本：[English](README.md) | [简体中文](README.zh-CN.md)
 
-Multi Agents Image Generation Evals Pipeline 是一个用于评估和比较 AI 图像生成模型的 Multiple Agent System。应用会把同一个 prompt 同时发送给两个图像生成 agent，再由独立 evaluation agent 按统一 rubric 评估两张输出图，并通过 critique agent 与 revision agent 多轮挑战和修正评分；当风险较高时，可暂停进入 human-in-the-loop (HIL) 人工裁决，并把每次运行的完整过程归档，便于后续复盘。
+Multi-Agent Image Generation Evals Pipeline 是一个用于评估和比较 AI 图像生成模型的 multi-agent system。应用会把同一个 prompt 同时发送给两个图像生成 agent，再由独立 evaluation agent 按统一 rubric 评估两张输出图，并通过 critique agent 与 revision agent 多轮挑战和修正评分；当风险较高时，可暂停进入 human-in-the-loop (HIL) 人工裁决，并把每次运行的完整过程归档，便于后续复盘。
 
-主入口是一个用于操作多 agent workflow 的中英双语 Streamlit Dashboard，支持并排看图、进度和 Activity Log、分数可视化、critique transcript、HIL 审核控件、历史 run 加载、删除和重跑。
+主入口是一个用于操作 multi-agent workflow 的中英双语 Streamlit Dashboard，支持并排看图、进度和 Activity Log、分数可视化、critique transcript、HIL 审核控件、历史 run 加载、删除和重跑。
 
 ## 功能概览
 
@@ -152,8 +152,8 @@ Dashboard 包含：
 ### 安装
 
 ```bash
-git clone https://github.com/stevenflyai/evalsimagegen.git
-cd evalsimagegen
+git clone https://github.com/stevenflyai/multi-agent-image-gen-evals.git
+cd multi-agent-image-gen-evals
 uv sync
 ```
 
@@ -237,7 +237,7 @@ prompt_inputs_08_final_revision.json
 ## 项目结构
 
 ```text
-evalsimagegen/
+multi-agent-image-gen-evals/
 |-- app.py                 # Streamlit dashboard 和 run 管理 UI
 |-- pipeline.py            # Pipeline 编排、持久化、resume/fallback 逻辑
 |-- generate.py            # 并行 GPT Image-2 和 Gemini 3 Pro 图像生成
@@ -291,4 +291,4 @@ evalsimagegen/
 
 Steven Lian (stevenlian2981@gmail.com)
 
-仓库地址：https://github.com/stevenflyai/evalsimagegen
+仓库地址：https://github.com/stevenflyai/multi-agent-image-gen-evals

@@ -1,10 +1,10 @@
-# Multi Agents Image Generation Evals Pipeline
+# Multi-Agent Image Generation Evals Pipeline
 
 Languages: [English](README.md) | [简体中文](README.zh-CN.md)
 
-Multi Agents Image Generation Evals Pipeline is a multiple agent system for evaluating and comparing AI image generation models. The app sends one prompt to two image-generation agents, uses a dedicated evaluation agent to score both outputs with a rubric, runs independent critique and revision agents to challenge the scores, optionally pauses for human-in-the-loop (HIL) review when risk is high, and archives every run for later inspection.
+Multi-Agent Image Generation Evals Pipeline is a multi-agent system for evaluating and comparing AI image generation models. The app sends one prompt to two image-generation agents, uses a dedicated evaluation agent to score both outputs with a rubric, runs independent critique and revision agents to challenge the scores, optionally pauses for human-in-the-loop (HIL) review when risk is high, and archives every run for later inspection.
 
-The primary UI is a bilingual Streamlit dashboard for operating this multiple agent workflow, with side-by-side images, progress/activity logs, score visualizations, critique transcripts, HIL review controls, historical run loading, delete, and rerun actions.
+The primary UI is a bilingual Streamlit dashboard for operating this multi-agent workflow, with side-by-side images, progress/activity logs, score visualizations, critique transcripts, HIL review controls, historical run loading, delete, and rerun actions.
 
 ## What It Does
 
@@ -152,8 +152,8 @@ The dashboard includes:
 ### Install
 
 ```bash
-git clone https://github.com/stevenflyai/evalsimagegen.git
-cd evalsimagegen
+git clone https://github.com/stevenflyai/multi-agent-image-gen-evals.git
+cd multi-agent-image-gen-evals
 uv sync
 ```
 
@@ -237,7 +237,7 @@ prompt_inputs_08_final_revision.json
 ## Project Structure
 
 ```text
-evalsimagegen/
+multi-agent-image-gen-evals/
 |-- app.py                 # Streamlit dashboard and run-management UI
 |-- pipeline.py            # Pipeline orchestration, persistence, resume/fallback logic
 |-- generate.py            # Parallel GPT Image-2 and Gemini 3 Pro generation
@@ -291,4 +291,4 @@ Key settings in [config.py](config.py):
 
 Steven Lian (stevenlian2981@gmail.com)
 
-Repository: https://github.com/stevenflyai/evalsimagegen
+Repository: https://github.com/stevenflyai/multi-agent-image-gen-evals
