@@ -14,9 +14,11 @@ pytest
 # Run a single test
 pytest tests/test_winner.py::test_tiebreak_by_largest_dimension_lead -v
 
-# Install dependencies (uses uv)
+# Install dependencies (uses uv; requires Python >=3.12)
 uv sync
 ```
+
+Dependencies are managed by `uv` — do not hand-edit `uv.lock`.
 
 ## Architecture
 
@@ -33,13 +35,14 @@ Cross-model adversarial image evaluation pipeline with multi-round critique: two
    - Round 2: **revise.py** — Claude Opus re-evaluates with Gemini's critique
    - Loop stops early if all score deltas < `CONVERGENCE_THRESHOLD` (default: 1)
 4. **compare.py** — Determines per-dimension and overall winner (mean score, tiebreak by largest single-dimension lead)
+5. **gates.py** — Deterministic HIL (human-in-the-loop) routing. Computes risk features (self-confidence, margin, cross-dim conflict, difficulty prior, evidence quality, variance) and weights them per phase (`PHASE1_NO_VARIANCE_WEIGHTS`, `PHASE2_WITH_VARIANCE_WEIGHTS`) to produce a `GateDecision` / `RouteBand`. Gated by `HIL_ENABLED_BY_DEFAULT` in config.py. Designed so phase 2 can run with HIL disabled and still emit auditable artifacts.
 
 ### Key modules
 
 - **config.py** — Centralized configuration: model names, retry settings, image sizes, pipeline parameters.
 - **utils.py** — Shared utilities: `image_to_b64()`, `retry_llm_call()`, `parse_llm_json()`, `strip_markdown_fences()`.
 - **prompts.py** — Single source of truth for rubric text and all system prompts (evaluation, critique, critique round 2, revision).
-- **schemas.py** — All Pydantic models. `ImageEvaluation`, `CritiqueResponse` (with `round` and `critic_model` fields), `RevisedEvaluation`, `ComparisonResult`. The 6 dimensions are defined in `DIMENSIONS` list.
+- **schemas.py** — All Pydantic models. `ImageEvaluation`, `CritiqueResponse` (with `round` and `critic_model` fields), `RevisedEvaluation`, `ComparisonResult`, plus gate-side models (`GateDecision`, `RouteFeatures`, `RouteBand`, `Gate1ReviewItem`, `IssueEquivalenceReport`). The 6 dimensions are defined in `DIMENSIONS` list.
 - **pipeline.py** — `PipelineResult` container (stores `critiques: list` and `revisions: list` for multi-round), `run_pipeline()` with `on_stage` callback and convergence check. Degrades gracefully: if any round's critique/revision fails, uses scores from previous round.
 - **app.py** — Streamlit dark-theme dashboard. CSS loaded from `static/style.css`. Renders side-by-side images, 6-step animated progress tracker, radar chart, dimension cards, multi-round critique transcript, raw JSON. Loads pre-baked results from `runs/` directory.
 - **i18n.py** — Dict-based translations (en/zh). Use `t(key, **kwargs)` for UI strings, `dim_label(dimension)` for dimension names. Default language is `"zh"`.
