@@ -20,7 +20,15 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Input/actions
         "new_comparison": "New Comparison",
         "prompt_label": "Prompt",
-        "input_placeholder": "Enter a prompt to compare image generators...",
+        "input_placeholder": "Describe what to generate, or how to transform the uploaded image...",
+        "reference_image_label": "Reference image",
+        "reference_image_help": "Upload an optional image for the generators to use as visual context.",
+        "reference_image_picker": "Add files or photos",
+        "reference_image_preview": "Reference image",
+        "reference_image_used": "Reference Image",
+        "attachment_click_to_enlarge": "Click to enlarge",
+        "attachment_remove": "Remove attachment",
+        "prompt_required": "Enter a prompt before generating.",
         "btn_generate": "Generate & Evaluate",
         "btn_rerun_from_error": "Rerun from failed step",
         "btn_delete_example": "Delete",
@@ -132,7 +140,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Error/empty states
         "error_pipeline_failed": "Pipeline failed: {error}",
         "error_image_failed": "Image generation failed",
-        "empty_state": "Enter a prompt above or load a pre-baked example to see side-by-side image comparison with cross-model adversarial evaluation.",
+        "error_details_unavailable": "Details unavailable. Rerun to capture the provider error.",
+        "empty_state": "Enter a prompt above, optionally attach a reference image, or load a pre-baked example to see side-by-side image comparison with cross-model adversarial evaluation.",
         "run_label": "Run: {prompt} ({timestamp})",
         # Activity log
         "activity_log": "Activity Log",
@@ -249,7 +258,15 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Input/actions
         "new_comparison": "新对比",
         "prompt_label": "Prompt",
-        "input_placeholder": "输入提示词以比较图像生成器...",
+        "input_placeholder": "描述要生成的内容，或说明如何基于上传图片进行改写...",
+        "reference_image_label": "参考图片",
+        "reference_image_help": "可选上传一张图片，让生成模型作为视觉参考。",
+        "reference_image_picker": "添加文件或照片",
+        "reference_image_preview": "参考图片",
+        "reference_image_used": "参考图片",
+        "attachment_click_to_enlarge": "点击放大",
+        "attachment_remove": "移除附件",
+        "prompt_required": "请先输入提示词再生成。",
         "btn_generate": "生成并评估",
         "btn_rerun_from_error": "从失败步骤重跑",
         "btn_delete_example": "删除",
@@ -361,7 +378,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         # Error/empty states
         "error_pipeline_failed": "流水线失败: {error}",
         "error_image_failed": "图像生成失败",
-        "empty_state": "在上方输入提示词或加载预设示例，查看跨模型对抗评审的图像对比评估。",
+        "error_details_unavailable": "错误详情不可用。请重跑以捕获服务商错误信息。",
+        "empty_state": "在上方输入提示词，可选上传参考图片，或加载预设示例，查看跨模型对抗评审的图像对比评估。",
         "run_label": "运行: {prompt} ({timestamp})",
         # Activity log
         "activity_log": "运行日志",

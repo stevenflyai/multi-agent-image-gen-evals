@@ -5,12 +5,15 @@ and persists all intermediate JSON to the runs/ directory.
 """
 
 import json
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from PIL import Image
+
 from compare import determine_winner
-from config import CONVERGENCE_THRESHOLD, HIL_ENABLED_BY_DEFAULT, MAX_CRITIQUE_ROUNDS
+from config import CONVERGENCE_THRESHOLD, HIL_ENABLED_BY_DEFAULT, IMAGE_MAX_SIZE, IMAGE_QUALITY, MAX_CRITIQUE_ROUNDS
 from critique import critique_evaluation, critique_evaluation_gemini
 from evaluate import evaluate_images
 from gates import evaluate_gate1, evaluate_gate2
@@ -39,6 +42,8 @@ class PipelineResult:
         self.prompt: str = ""
         self.run_dir: Path | None = None
         self.image_paths: dict[str, Path | Exception] = {}
+        self.reference_image_path: Path | None = None
+        self.reference_image_name: str | None = None
         self.eval_a: ImageEvaluation | None = None
         self.eval_b: ImageEvaluation | None = None
         self.critiques: list[CritiqueResponse] = []
@@ -82,6 +87,8 @@ def run_pipeline(
     runs_dir: Path = Path("runs"),
     on_stage: Callable[[str], None] | None = None,
     on_image_done: Callable[[str], None] | None = None,
+    reference_image: bytes | None = None,
+    reference_image_name: str | None = None,
 ) -> PipelineResult:
     """Run the full evaluation pipeline with multi-round critique.
 
@@ -93,6 +100,7 @@ def run_pipeline(
     result = PipelineResult()
     result.prompt = prompt
     result.timestamp = datetime.now().isoformat()
+    result.reference_image_name = reference_image_name
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = runs_dir / ts
@@ -101,6 +109,15 @@ def run_pipeline(
 
     # Save prompt
     (run_dir / "prompt.txt").write_text(prompt)
+    if reference_image:
+        try:
+            result.reference_image_path = _persist_reference_image(run_dir, reference_image)
+        except Exception as e:
+            result.errors.append(f"Reference image failed: {_format_exception(e)}")
+            result.pipeline_status = "failed"
+            result.requires_attention = True
+            _save_result(result)
+            return result
 
     def notify(stage: str) -> None:
         if on_stage:
@@ -108,16 +125,21 @@ def run_pipeline(
 
     # Step 1: Generate images
     notify("stage_generating")
-    result.image_paths = generate_images(prompt, run_dir, on_model_done=on_image_done)
+    result.image_paths = generate_images(
+        prompt,
+        run_dir,
+        on_model_done=on_image_done,
+        reference_image_path=result.reference_image_path,
+    )
 
     gpt_path = result.image_paths.get("gpt_image_2")
     gemini_path = result.image_paths.get("gemini_3_pro")
 
     if isinstance(gpt_path, Exception):
-        result.errors.append(f"GPT Image-2 failed: {gpt_path}")
+        result.errors.append(f"GPT Image-2 failed: {_format_exception(gpt_path)}")
         gpt_path = None
     if isinstance(gemini_path, Exception):
-        result.errors.append(f"Gemini 3 Pro failed: {gemini_path}")
+        result.errors.append(f"Gemini 3 Pro failed: {_format_exception(gemini_path)}")
         gemini_path = None
 
     if not gpt_path or not gemini_path:
@@ -303,27 +325,58 @@ def run_pipeline(
 def resume_pipeline_from_result(
     result: PipelineResult,
     on_stage: Callable[[str], None] | None = None,
+    on_image_done: Callable[[str], None] | None = None,
 ) -> PipelineResult:
     """Resume a partially failed run from the first missing pipeline artifact."""
     if not result.run_dir:
         raise ValueError("Cannot resume a run without a run directory")
 
     run_dir = result.run_dir
-    gpt_path = result.image_paths.get("gpt_image_2") or run_dir / "gpt_image_2.png"
-    gemini_path = result.image_paths.get("gemini_3_pro") or run_dir / "gemini_3_pro.png"
-    if isinstance(gpt_path, Exception) or isinstance(gemini_path, Exception):
-        raise ValueError("Cannot resume until both generated images are available")
-    if not isinstance(gpt_path, Path) or not gpt_path.exists() or not isinstance(gemini_path, Path) or not gemini_path.exists():
-        raise ValueError("Cannot resume until both generated images are available")
-
-    result.image_paths["gpt_image_2"] = gpt_path
-    result.image_paths["gemini_3_pro"] = gemini_path
     result.errors = []
     result.pipeline_status = "partial"
 
     def notify(stage: str) -> None:
         if on_stage:
             on_stage(stage)
+
+    if not result.reference_image_path:
+        result.reference_image_path = _find_reference_image(run_dir)
+
+    gpt_path = _existing_image_path(result.image_paths.get("gpt_image_2"), run_dir / "gpt_image_2.png")
+    gemini_path = _existing_image_path(result.image_paths.get("gemini_3_pro"), run_dir / "gemini_3_pro.png")
+
+    if not gpt_path or not gemini_path:
+        notify("stage_generating")
+        result.eval_a = None
+        result.eval_b = None
+        result.prompt_difficulty = None
+        result.critiques = []
+        result.revisions = []
+        result.gate_decisions = []
+        result.issue_equivalence = None
+        result.comparison = None
+        result.requires_attention = False
+        result.rounds_completed = 0
+        result.image_paths = generate_images(
+            result.prompt,
+            run_dir,
+            on_model_done=on_image_done,
+            reference_image_path=result.reference_image_path,
+        )
+        gpt_path = _existing_image_path(result.image_paths.get("gpt_image_2"), run_dir / "gpt_image_2.png")
+        gemini_path = _existing_image_path(result.image_paths.get("gemini_3_pro"), run_dir / "gemini_3_pro.png")
+        if isinstance(result.image_paths.get("gpt_image_2"), Exception):
+            result.errors.append(f"GPT Image-2 failed: {_format_exception(result.image_paths['gpt_image_2'])}")
+        if isinstance(result.image_paths.get("gemini_3_pro"), Exception):
+            result.errors.append(f"Gemini 3 Pro failed: {_format_exception(result.image_paths['gemini_3_pro'])}")
+        if not gpt_path or not gemini_path:
+            result.pipeline_status = "failed"
+            result.requires_attention = True
+            _save_result(result)
+            return result
+
+    result.image_paths["gpt_image_2"] = gpt_path
+    result.image_paths["gemini_3_pro"] = gemini_path
 
     if not result.eval_a or not result.eval_b:
         notify("stage_evaluating")
@@ -518,6 +571,42 @@ def _persist_evaluation(run_dir: Path, result: PipelineResult) -> None:
     )
 
 
+def _existing_image_path(candidate: Path | Exception | None, fallback: Path) -> Path | None:
+    if isinstance(candidate, Path) and candidate.exists():
+        return candidate
+    if fallback.exists():
+        return fallback
+    return None
+
+
+def _find_reference_image(run_dir: Path) -> Path | None:
+    for filename in ("reference_image.jpg", "reference_image.jpeg", "reference_image.png", "reference_image.webp"):
+        path = run_dir / filename
+        if path.exists():
+            return path
+    return None
+
+
+def _format_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return message
+    fallback = repr(exc).strip()
+    if fallback and fallback != f"{type(exc).__name__}()":
+        return fallback
+    return type(exc).__name__
+
+
+def _persist_reference_image(run_dir: Path, image_bytes: bytes) -> Path:
+    output_path = run_dir / "reference_image.jpg"
+    with Image.open(BytesIO(image_bytes)) as image:
+        image.thumbnail((IMAGE_MAX_SIZE, IMAGE_MAX_SIZE), Image.LANCZOS)
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(output_path, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
+    return output_path
+
+
 def _gate_by_name(result: PipelineResult, gate_name: str) -> GateDecision | None:
     for gate in result.gate_decisions:
         if gate.gate == gate_name:
@@ -537,6 +626,8 @@ def _save_result(result: PipelineResult) -> None:
             "prompt": result.prompt,
             "timestamp": result.timestamp,
             "errors": result.errors,
+            "reference_image": result.reference_image_path.name if result.reference_image_path else None,
+            "reference_image_source": result.reference_image_name,
             "pipeline_status": result.pipeline_status,
             "requires_attention": result.requires_attention,
             "prompt_difficulty": result.prompt_difficulty,

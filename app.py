@@ -10,6 +10,7 @@ import re
 import shutil
 import threading
 import time
+import base64
 from datetime import datetime
 from html import escape as esc
 from pathlib import Path
@@ -29,7 +30,7 @@ HISTORY_INDEX_PATH = RUNS_DIR / "index.json"
 st.set_page_config(
     page_title="图像生成模型评估流水线" if st.session_state.get("lang", "en") == "zh" else "IMAGE GENERATION Model Evals PIPELINE",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 if "ui_theme" not in st.session_state:
@@ -293,6 +294,14 @@ if _theme_override:
     st.markdown(_theme_override, unsafe_allow_html=True)
 
 
+def _find_reference_image(run_dir: Path) -> Path | None:
+    for filename in ("reference_image.jpg", "reference_image.jpeg", "reference_image.png", "reference_image.webp"):
+        path = run_dir / filename
+        if path.exists():
+            return path
+    return None
+
+
 def _load_result_from_dir(run_dir: Path, prompt: str) -> PipelineResult | None:
     """Reconstruct a PipelineResult from saved JSON files."""
     from schemas import (
@@ -303,6 +312,8 @@ def _load_result_from_dir(run_dir: Path, prompt: str) -> PipelineResult | None:
     result.prompt = prompt
     result.run_dir = run_dir
     result.timestamp = run_dir.name.replace("_", " ")
+
+    result.reference_image_path = _find_reference_image(run_dir)
 
     # Load images
     gpt_path = run_dir / "gpt_image_2.png"
@@ -474,6 +485,14 @@ if "run_progress_snapshots" not in st.session_state:
     st.session_state.run_progress_snapshots = {}
 if "reviewer" not in st.session_state:
     st.session_state.reviewer = "local_reviewer"
+if "show_reference_uploader" not in st.session_state:
+    st.session_state.show_reference_uploader = False
+if "reference_upload_bytes" not in st.session_state:
+    st.session_state.reference_upload_bytes = None
+if "reference_upload_name" not in st.session_state:
+    st.session_state.reference_upload_name = None
+if "reference_upload_type" not in st.session_state:
+    st.session_state.reference_upload_type = None
 if "history_loaded" not in st.session_state:
     indexed_runs = _load_indexed_history()
     merged_runs: list[PipelineResult] = []
@@ -610,6 +629,37 @@ def _load_progress_snapshot(result: PipelineResult) -> dict | None:
     if not isinstance(data, dict) or not data.get("progress"):
         return None
     return data
+
+
+def _display_error(error: str) -> str:
+    text = re.sub(r"\s+", " ", str(error)).strip()
+    if not text:
+        return t("error_details_unavailable")
+    if re.search(r":\s*$", text):
+        return f"{text} {t('error_details_unavailable')}"
+    return text
+
+
+def _display_errors(errors: list[str]) -> str:
+    return "; ".join(_display_error(error) for error in errors)
+
+
+def _attachment_preview_html(image_bytes: bytes, name: str | None, media_type: str | None) -> str:
+    safe_media_type = media_type if media_type and media_type.startswith("image/") else "image/jpeg"
+    encoded = base64.b64encode(image_bytes).decode()
+    data_url = f"data:{safe_media_type};base64,{encoded}"
+    label = esc(name or t("reference_image_preview"))
+    return (
+        '<div class="attachment-preview-row">'
+        f'<a class="attachment-thumb-link" href="{data_url}" target="_blank" title="{esc(t("attachment_click_to_enlarge"))}">'
+        f'<img src="{data_url}" alt="{label}" />'
+        '</a>'
+        '<div class="attachment-meta">'
+        f'<strong>{label}</strong>'
+        f'<span>{esc(t("attachment_click_to_enlarge"))}</span>'
+        '</div>'
+        '</div>'
+    )
 
 
 def _focused_run_entry() -> tuple[int, PipelineResult] | None:
@@ -1119,64 +1169,106 @@ prebaked = load_prebaked_results()
 selected_prebaked = ""
 selected_prebaked_result: PipelineResult | None = None
 rerun_selected_clicked = False
+generate_clicked = False
 with st.container(border=True):
     st.markdown(f'<div class="control-card-title">{esc(t("new_comparison"))}</div>', unsafe_allow_html=True)
-    control_input, control_action = st.columns([4.2, 1.25], vertical_alignment="bottom")
-    with control_input:
-        if prebaked:
-            example_select, example_delete, example_rerun = st.columns([5, 0.9, 0.9], vertical_alignment="bottom")
-            options = [""] + list(prebaked.keys())
-            if st.session_state.get("selected_prebaked_run") not in options:
-                st.session_state.selected_prebaked_run = ""
+    if prebaked:
+        example_select, example_delete, example_rerun = st.columns([5, 0.9, 0.9], vertical_alignment="bottom")
+        options = [""] + list(prebaked.keys())
+        if st.session_state.get("selected_prebaked_run") not in options:
+            st.session_state.selected_prebaked_run = ""
+            st.session_state.loaded_prebaked_run_key = None
+        with example_select:
+            selected_prebaked = st.selectbox(
+                t("select_example"),
+                options,
+                format_func=lambda x: _prebaked_option_label(x, prebaked),
+                key="selected_prebaked_run",
+            )
+        selected_prebaked_result = prebaked.get(selected_prebaked) if selected_prebaked else None
+        with example_delete:
+            delete_selected_clicked = st.button(
+                t("btn_delete_example"),
+                disabled=st.session_state.running or selected_prebaked_result is None,
+                use_container_width=True,
+            )
+        with example_rerun:
+            rerun_selected_clicked = st.button(
+                t("btn_rerun_example"),
+                disabled=st.session_state.running or selected_prebaked_result is None,
+                use_container_width=True,
+            )
+        if delete_selected_clicked and selected_prebaked_result is not None:
+            _delete_run_record(selected_prebaked_result)
+            load_prebaked_results.clear()
+            if st.session_state.loaded_prebaked_run_key == selected_prebaked:
                 st.session_state.loaded_prebaked_run_key = None
-            with example_select:
-                selected_prebaked = st.selectbox(
-                    t("select_example"),
-                    options,
-                    format_func=lambda x: _prebaked_option_label(x, prebaked),
-                    key="selected_prebaked_run",
-                )
-            selected_prebaked_result = prebaked.get(selected_prebaked) if selected_prebaked else None
-            with example_delete:
-                delete_selected_clicked = st.button(
-                    t("btn_delete_example"),
-                    disabled=st.session_state.running or selected_prebaked_result is None,
-                    use_container_width=True,
-                )
-            with example_rerun:
-                rerun_selected_clicked = st.button(
-                    t("btn_rerun_example"),
-                    disabled=st.session_state.running or selected_prebaked_result is None,
-                    use_container_width=True,
-                )
-            if delete_selected_clicked and selected_prebaked_result is not None:
-                _delete_run_record(selected_prebaked_result)
-                load_prebaked_results.clear()
-                if st.session_state.loaded_prebaked_run_key == selected_prebaked:
-                    st.session_state.loaded_prebaked_run_key = None
+            st.rerun()
+        if selected_prebaked_result is not None:
+            loaded = selected_prebaked_result
+            loaded_key = _run_key(loaded)
+            selection_changed = st.session_state.loaded_prebaked_run_key != selected_prebaked
+            missing_from_session = all(_run_key(run) != loaded_key for run in st.session_state.runs)
+            if selection_changed or missing_from_session:
+                _remember_run(loaded)
+                st.session_state.loaded_prebaked_run_key = selected_prebaked
                 st.rerun()
-            if selected_prebaked_result is not None:
-                loaded = selected_prebaked_result
-                loaded_key = _run_key(loaded)
-                selection_changed = st.session_state.loaded_prebaked_run_key != selected_prebaked
-                missing_from_session = all(_run_key(run) != loaded_key for run in st.session_state.runs)
-                if selection_changed or missing_from_session:
-                    _remember_run(loaded)
-                    st.session_state.loaded_prebaked_run_key = selected_prebaked
+        else:
+            st.session_state.loaded_prebaked_run_key = None
+
+    with st.container(border=True):
+        if st.session_state.reference_upload_bytes:
+            preview_col, clear_col = st.columns([8, 0.6], vertical_alignment="center")
+            with preview_col:
+                st.markdown(
+                    _attachment_preview_html(
+                        st.session_state.reference_upload_bytes,
+                        st.session_state.reference_upload_name,
+                        st.session_state.reference_upload_type,
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with clear_col:
+                if st.button("×", key="attachment_clear", help=t("attachment_remove"), disabled=st.session_state.running):
+                    st.session_state.reference_upload_bytes = None
+                    st.session_state.reference_upload_name = None
+                    st.session_state.reference_upload_type = None
+                    st.session_state.show_reference_uploader = False
                     st.rerun()
-            else:
-                st.session_state.loaded_prebaked_run_key = None
-        prompt = st.text_input(
+
+        prompt = st.text_area(
             t("prompt_label"),
             placeholder=t("input_placeholder"),
+            height=118,
+            key="prompt_composer",
+            label_visibility="collapsed",
         )
-    with control_action:
-        generate_clicked = st.button(
-            t("btn_generate"),
-            type="primary",
-            disabled=st.session_state.running,
-            use_container_width=True,
-        )
+        toolbar_add, toolbar_gap, toolbar_generate = st.columns([0.55, 5.0, 1.35], vertical_alignment="center")
+        with toolbar_add:
+            if st.button("＋", key="attachment_add", help=t("reference_image_help"), disabled=st.session_state.running, use_container_width=True):
+                st.session_state.show_reference_uploader = not st.session_state.show_reference_uploader
+        with toolbar_generate:
+            generate_clicked = st.button(
+                t("btn_generate"),
+                type="primary",
+                disabled=st.session_state.running,
+                use_container_width=True,
+                key="composer_generate",
+            )
+        if st.session_state.show_reference_uploader:
+            reference_upload = st.file_uploader(
+                t("reference_image_picker"),
+                type=["png", "jpg", "jpeg", "webp"],
+                help=t("reference_image_help"),
+                disabled=st.session_state.running,
+                key="reference_image_upload",
+            )
+            if reference_upload is not None:
+                st.session_state.reference_upload_bytes = reference_upload.getvalue()
+                st.session_state.reference_upload_name = reference_upload.name
+                st.session_state.reference_upload_type = reference_upload.type
+                st.session_state.show_reference_uploader = False
+                st.rerun()
 
 # --- Run pipeline ---
 
@@ -1390,6 +1482,14 @@ def _progress_snapshot_for_result(result: PipelineResult) -> dict | None:
 
 
 run_prompt = selected_prebaked_result.prompt if rerun_selected_clicked and selected_prebaked_result is not None else prompt.strip()
+run_reference_image_bytes = None
+run_reference_image_name = None
+if rerun_selected_clicked and selected_prebaked_result is not None and selected_prebaked_result.reference_image_path:
+    run_reference_image_bytes = selected_prebaked_result.reference_image_path.read_bytes()
+    run_reference_image_name = selected_prebaked_result.reference_image_path.name
+elif not rerun_selected_clicked and st.session_state.reference_upload_bytes:
+    run_reference_image_bytes = st.session_state.reference_upload_bytes
+    run_reference_image_name = st.session_state.reference_upload_name
 
 if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
     st.session_state.running = True
@@ -1423,7 +1523,11 @@ if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
     def _run_pipeline() -> None:
         try:
             _result_holder["result"] = run_pipeline(
-                run_prompt.strip(), on_stage=_on_stage, on_image_done=_on_image_done,
+                run_prompt.strip(),
+                on_stage=_on_stage,
+                on_image_done=_on_image_done,
+                reference_image=run_reference_image_bytes,
+                reference_image_name=run_reference_image_name,
             )
         except Exception as e:
             _result_holder["error"] = e
@@ -1458,7 +1562,7 @@ if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
         completed_result = _result_holder["result"]
         completed_run_key = _run_key(completed_result)
         if completed_result.pipeline_status == "failed" or not completed_result.comparison:
-            error_text = "; ".join(completed_result.errors) if completed_result.errors else "Image generation failed"
+            error_text = _display_errors(completed_result.errors) if completed_result.errors else t("error_image_failed")
             progress_html = _render_progress(0, t("error_pipeline_failed", error=error_text), _activity_summary_text(_st, _gmd, pipeline_start, _now))
         else:
             progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, _gmd, pipeline_start, _now))
@@ -1476,10 +1580,12 @@ if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
     else:
         err = _result_holder.get("error", Exception("Unknown error"))
         logger.exception("Pipeline failed")
-        st.error(t("error_pipeline_failed", error=str(err)))
+        st.error(t("error_pipeline_failed", error=_display_error(str(err))))
 
     st.session_state.running = False
     st.rerun()
+elif generate_clicked and not run_prompt.strip():
+    st.warning(t("prompt_required"))
 
 # --- Empty state ---
 _focused_entry = _focused_run_entry()
@@ -1504,6 +1610,7 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
     )
 
     stage_times: list[tuple[str, float, float | None]] = []
+    gen_model_done: dict[str, float] = {}
     pipeline_start = time.time()
     _lock = threading.Lock()
     _done_event = threading.Event()
@@ -1518,9 +1625,17 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
             if stage != "stage_complete":
                 stage_times.append((stage, _now, None))
 
+    def _on_image_done(model_key: str) -> None:
+        with _lock:
+            gen_model_done[model_key] = time.time()
+
     def _run_resume() -> None:
         try:
-            _result_holder["result"] = resume_pipeline_from_result(result, on_stage=_on_stage)
+            _result_holder["result"] = resume_pipeline_from_result(
+                result,
+                on_stage=_on_stage,
+                on_image_done=_on_image_done,
+            )
         except Exception as e:
             _result_holder["error"] = e
         finally:
@@ -1533,10 +1648,11 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
         _now = time.time()
         with _lock:
             _st = list(stage_times)
+            _gmd = dict(gen_model_done)
         _active_stage = _st[-1][0] if _st else "status_rerunning"
         _active_idx = STAGE_TO_INDEX.get(_active_stage, 0)
         status_container.markdown(
-            _render_progress(_active_idx, t(_active_stage), _activity_summary_text(_st, {}, pipeline_start, _now)),
+            _render_progress(_active_idx, t(_active_stage), _activity_summary_text(_st, _gmd, pipeline_start, _now)),
             unsafe_allow_html=True,
         )
 
@@ -1547,23 +1663,28 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
             last = stage_times[-1]
             stage_times[-1] = (last[0], last[1], _now)
         _st = list(stage_times)
+        _gmd = dict(gen_model_done)
 
     if "result" in _result_holder:
         resumed_result = _result_holder["result"]
         resumed_run_key = _run_key(resumed_result)
-        progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, {}, pipeline_start, _now))
-        activity_html = _render_activity_log(_st, {}, pipeline_start, _now)
-        st.session_state.run_progress_snapshots[resumed_run_key] = {
-            "progress": progress_html,
-            "activity": activity_html,
-        }
-        _save_progress_snapshot(resumed_result, progress_html, activity_html)
+        if resumed_result.pipeline_status == "failed" or not resumed_result.comparison:
+            error_text = _display_errors(resumed_result.errors) if resumed_result.errors else t("error_image_failed")
+            progress_html = _render_progress(0, t("error_pipeline_failed", error=error_text), _activity_summary_text(_st, _gmd, pipeline_start, _now))
+        else:
+            progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, _gmd, pipeline_start, _now))
+            activity_html = _render_activity_log(_st, _gmd, pipeline_start, _now)
+            st.session_state.run_progress_snapshots[resumed_run_key] = {
+                "progress": progress_html,
+                "activity": activity_html,
+            }
+            _save_progress_snapshot(resumed_result, progress_html, activity_html)
         _remember_run(resumed_result)
         status_container.markdown(progress_html, unsafe_allow_html=True)
     else:
         err = _result_holder.get("error", Exception("Unknown error"))
         logger.exception("Pipeline resume failed")
-        st.error(t("error_pipeline_failed", error=str(err)))
+        st.error(t("error_pipeline_failed", error=_display_error(str(err))))
 
     st.session_state.running = False
     st.rerun()
@@ -1590,7 +1711,7 @@ def render_result(result: PipelineResult, index: int) -> None:
             is_warning = result.comparison is not None and err.startswith("Critique round 2 failed:")
             card_cls = "warning-card" if is_warning else "error-card"
             text_cls = "warning-text" if is_warning else "error-text"
-            st.markdown(f'<div class="{card_cls}"><div class="{text_cls}">⚠ {esc(err)}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="{card_cls}"><div class="{text_cls}">⚠ {esc(_display_error(err))}</div></div>', unsafe_allow_html=True)
         if is_focused and result.run_dir:
             if st.button(
                 t("btn_rerun_from_error"),
@@ -1603,9 +1724,17 @@ def render_result(result: PipelineResult, index: int) -> None:
     # --- Images ---
     gpt_path = result.image_paths.get("gpt_image_2")
     gemini_path = result.image_paths.get("gemini_3_pro")
+    reference_path = result.reference_image_path
 
     if gpt_path or gemini_path:
-        col_a, col_b = st.columns(2)
+        image_columns = st.columns([0.8, 1, 1]) if reference_path else st.columns(2)
+        if reference_path:
+            with image_columns[0]:
+                st.markdown(f'<div class="model-label">{t("reference_image_used")}</div>', unsafe_allow_html=True)
+                if reference_path.exists():
+                    st.image(str(reference_path), width="stretch")
+        col_a = image_columns[1] if reference_path else image_columns[0]
+        col_b = image_columns[2] if reference_path else image_columns[1]
         with col_a:
             st.markdown(f'<div class="model-label">{t("model_gpt")}</div>', unsafe_allow_html=True)
             if isinstance(gpt_path, Path) and gpt_path.exists():

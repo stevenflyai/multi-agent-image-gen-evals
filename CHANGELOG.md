@@ -2,7 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
-The current project version is `0.7`. For every future version update, add a new entry at the top of this file so version changes remain traceable.
+The current project version is `0.8`. For every future version update, add a new entry at the top of this file so version changes remain traceable.
+
+## [0.8] - 2026-05-08
+
+### Added
+
+- Added support for uploading a reference image in the Streamlit generation composer, including an inline thumbnail preview and click-to-enlarge behavior before starting a run.
+- Added end-to-end reference-image generation support across the pipeline: uploaded images are normalized, persisted with run artifacts, passed to GPT Image-2 and Gemini 3 Pro, and reloaded with historical runs.
+- Added side-by-side comparison display that includes the uploaded reference image alongside the generated GPT Image-2 and Gemini 3 Pro outputs when a run uses an attachment.
+- Added resumable generation for failed attachment runs so "Rerun from failed step" can regenerate missing images instead of requiring a fully completed generation stage.
+
+### Changed
+
+- Updated GPT Image-2 attachment generation to use streaming image edits, low-latency image quality settings, bounded request timeouts, and single-attempt attachment retries to avoid long hidden retry loops.
+- Improved generation failure messages so empty provider exceptions and timeout cases are shown with actionable details in the dashboard.
+
+### Notes
+
+- GPT Image-2 and Azure OpenAI support reference-image editing, but attachment edits can be slower than text-only generation; the app now handles this path more directly and records attachment metadata in run summaries.
 
 ## [0.7] - 2026-05-05
 

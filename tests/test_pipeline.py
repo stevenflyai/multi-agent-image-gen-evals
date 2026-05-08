@@ -1,14 +1,17 @@
 """Tests for pipeline convergence and fallback logic."""
 
 import json
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from pipeline import _scores_converged, _build_comparison_fallback, PipelineResult, resume_pipeline_from_result, run_pipeline
 from schemas import (
     CritiqueResponse,
     DIMENSIONS,
     DimensionCritique,
     DimensionScore,
+    GateDecision,
     ImageEvaluation,
     RevisedDimensionScore,
     RevisedEvaluation,
@@ -127,6 +130,55 @@ class TestImageGenerationFailure:
         assert summary["pipeline_status"] == "failed"
         assert summary["has_comparison"] is False
 
+    def test_image_generation_failure_with_empty_exception_has_message(self, tmp_path, monkeypatch):
+        def fake_generate_images(*args, **kwargs):
+            gemini_path = tmp_path / "gemini_3_pro.png"
+            gemini_path.write_bytes(b"image")
+            return {
+                "gpt_image_2": TimeoutError(),
+                "gemini_3_pro": gemini_path,
+            }
+
+        monkeypatch.setattr("pipeline.generate_images", fake_generate_images)
+
+        result = run_pipeline("test prompt", runs_dir=tmp_path)
+
+        assert result.errors == ["GPT Image-2 failed: TimeoutError"]
+        summary = json.loads((result.run_dir / "summary.json").read_text())
+        assert summary["errors"] == ["GPT Image-2 failed: TimeoutError"]
+
+    def test_reference_image_is_persisted_for_generation(self, tmp_path, monkeypatch):
+        image_buffer = BytesIO()
+        Image.new("RGB", (2000, 1000), color="red").save(image_buffer, format="JPEG")
+        seen = {}
+
+        def fake_generate_images(prompt, run_dir, on_model_done=None, reference_image_path=None):
+            seen["reference_image_path"] = reference_image_path
+            return {
+                "gpt_image_2": RuntimeError("stop before eval"),
+                "gemini_3_pro": RuntimeError("stop before eval"),
+            }
+
+        monkeypatch.setattr("pipeline.generate_images", fake_generate_images)
+
+        result = run_pipeline(
+            "turn this into a product hero image",
+            runs_dir=tmp_path,
+            reference_image=image_buffer.getvalue(),
+            reference_image_name="customer-upload.jpg",
+        )
+
+        assert result.pipeline_status == "failed"
+        assert result.reference_image_path == result.run_dir / "reference_image.jpg"
+        assert seen["reference_image_path"] == result.run_dir / "reference_image.jpg"
+        assert result.reference_image_path.exists()
+        with Image.open(result.reference_image_path) as persisted_image:
+            assert persisted_image.format == "JPEG"
+            assert max(persisted_image.size) <= 768
+        summary = json.loads((result.run_dir / "summary.json").read_text())
+        assert summary["reference_image"] == "reference_image.jpg"
+        assert summary["reference_image_source"] == "customer-upload.jpg"
+
 
 class TestPipelineResultProperties:
     def test_critique_property_returns_last(self):
@@ -151,6 +203,73 @@ class TestPipelineResultProperties:
 
 
 class TestResumePipeline:
+    def test_resumes_by_regenerating_failed_images(self, tmp_path, monkeypatch):
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        reference_image = run_dir / "reference_image.png"
+        reference_image.write_bytes(b"reference")
+        gemini_old = run_dir / "gemini_3_pro.png"
+        gemini_old.write_bytes(b"old gemini")
+
+        result = PipelineResult()
+        result.prompt = "test prompt"
+        result.run_dir = run_dir
+        result.reference_image_path = reference_image
+        result.image_paths = {
+            "gpt_image_2": RuntimeError("AuthenticationTypeDisabled"),
+            "gemini_3_pro": gemini_old,
+        }
+        result.errors = ["GPT Image-2 failed: AuthenticationTypeDisabled"]
+        image_done = []
+        calls = {"generate": 0, "eval": 0, "gate1": 0, "critique": 0, "revise": 0}
+
+        def fake_generate_images(prompt, run_dir_arg, on_model_done=None, reference_image_path=None):
+            calls["generate"] += 1
+            assert prompt == "test prompt"
+            assert run_dir_arg == run_dir
+            assert reference_image_path == reference_image
+            gpt_path = run_dir / "gpt_image_2.png"
+            gemini_path = run_dir / "gemini_3_pro.png"
+            gpt_path.write_bytes(b"new gpt")
+            gemini_path.write_bytes(b"new gemini")
+            if on_model_done:
+                on_model_done("gpt_image_2")
+                on_model_done("gemini_3_pro")
+            return {"gpt_image_2": gpt_path, "gemini_3_pro": gemini_path}
+
+        def fake_evaluate_images(*args, **kwargs):
+            calls["eval"] += 1
+            return _make_eval("A", [8, 8, 8, 8, 8, 8]), _make_eval("B", [6, 6, 6, 6, 6, 6]), "medium"
+
+        def fake_gate1(*args, **kwargs):
+            calls["gate1"] += 1
+            return GateDecision(gate="gate1_uncertainty_risk_router", status="not_required")
+
+        def fake_critique(*args, **kwargs):
+            calls["critique"] += 1
+            return _make_critique(1)
+
+        def fake_revise(*args, **kwargs):
+            calls["revise"] += 1
+            return _make_revision([8, 8, 8, 8, 8, 8], [6, 6, 6, 6, 6, 6])
+
+        monkeypatch.setattr("pipeline.MAX_CRITIQUE_ROUNDS", 1)
+        monkeypatch.setattr("pipeline.generate_images", fake_generate_images)
+        monkeypatch.setattr("pipeline.evaluate_images", fake_evaluate_images)
+        monkeypatch.setattr("pipeline.evaluate_gate1", fake_gate1)
+        monkeypatch.setattr("pipeline.critique_evaluation", fake_critique)
+        monkeypatch.setattr("pipeline.revise_evaluation", fake_revise)
+
+        resumed = resume_pipeline_from_result(result, on_image_done=image_done.append)
+
+        assert calls == {"generate": 1, "eval": 1, "gate1": 1, "critique": 1, "revise": 1}
+        assert image_done == ["gpt_image_2", "gemini_3_pro"]
+        assert resumed.errors == []
+        assert resumed.pipeline_status == "completed"
+        assert resumed.comparison is not None
+        assert resumed.image_paths["gpt_image_2"] == run_dir / "gpt_image_2.png"
+        assert resumed.image_paths["gemini_3_pro"] == run_dir / "gemini_3_pro.png"
+
     def test_resumes_from_round2_critique_failure(self, tmp_path, monkeypatch):
         run_dir = tmp_path / "run"
         run_dir.mkdir()

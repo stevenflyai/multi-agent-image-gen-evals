@@ -2,6 +2,8 @@
 
 Languages: [English](README.md) | [简体中文](README.zh-CN.md)
 
+Current version: `0.8` (last updated 2026-05-08). See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 Multi-Agent Image Generation Evals Pipeline is a multi-agent system for evaluating and comparing AI image generation models. The app sends one prompt to two image-generation agents, uses a dedicated evaluation agent to score both outputs with a rubric, runs independent critique and revision agents to challenge the scores, optionally pauses for human-in-the-loop (HIL) review when risk is high, and archives every run for later inspection.
 
 The primary UI is a bilingual Streamlit dashboard for operating this multi-agent workflow, with side-by-side images, progress/activity logs, score visualizations, critique transcripts, HIL review controls, historical run loading, delete, and rerun actions.
