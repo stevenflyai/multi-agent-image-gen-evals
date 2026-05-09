@@ -1,0 +1,211 @@
+:root {
+    --bg-app: #0A0A0A;
+    --bg-surface: #18181B;
+    --bg-subtle: #27272A;
+    --border: #27272A;
+    --border-strong: #3F3F46;
+    --text-primary: #FAFAFA;
+    --text-secondary: #D4D4D8;
+    --text-tertiary: #A1A1AA;
+    --brand: #6366F1;
+    --brand-hover: #818CF8;
+    --brand-soft: rgba(99,102,241,0.18);
+    --model-a: #818CF8;
+    --model-a-soft: rgba(99,102,241,0.20);
+    --model-b: #F59E0B;
+    --model-b-soft: rgba(245,158,11,0.18);
+    --success: #22C55E;
+    --warning: #F59E0B;
+    --danger: #F87171;
+    --info: #22D3EE;
+    --surface-page: var(--bg-app);
+    --surface-card: var(--bg-surface);
+    --surface-muted: var(--bg-subtle);
+    --surface-soft: #202024;
+    --border-soft: var(--border);
+    --text-main: var(--text-primary);
+    --text-muted: var(--text-secondary);
+    --text-soft: var(--text-tertiary);
+    --accent-blue: var(--brand);
+    --accent-green: var(--success);
+    --accent-teal: var(--info);
+    --accent-amber: var(--warning);
+    --shadow-card: 0 18px 44px rgba(0,0,0,0.34);
+    --shadow-soft: 0 10px 28px rgba(0,0,0,0.24);
+}
+.stApp,
+.main .block-container {
+    background: var(--bg-app) !important;
+    color: var(--text-primary) !important;
+}
+.eval-header,
+.dashboard-page .arch-hero,
+.dashboard-metric,
+.dashboard-cell,
+.dashboard-table,
+.dashboard-table tbody td,
+.dim-card,
+.winner-banner,
+.hil-v2-panel,
+.pipeline-panel,
+.pipeline-tracker,
+.activity-log,
+[data-testid="stExpander"],
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] [data-testid="stExpanderDetails"],
+.score-badge,
+.hil-chip,
+.hil-gate-card,
+.gate2-dispute,
+.gate2-summary-card,
+.critique-step,
+.dim-comment-table tbody td {
+    background: var(--bg-surface) !important;
+    border-color: var(--border) !important;
+    color: var(--text-primary) !important;
+    box-shadow: var(--shadow-card);
+}
+[data-testid="stSidebar"] {
+    background: var(--bg-surface) !important;
+    border-right-color: var(--border) !important;
+}
+[data-testid="stSidebar"] *,
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] p,
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stExpander"] summary p,
+.eval-header h1,
+.dashboard-page .arch-hero h2,
+.dashboard-metric strong,
+.hil-gate-title,
+.hil-chip strong,
+.step-content strong,
+.dim-score-val,
+.score-val {
+    color: var(--text-primary) !important;
+}
+.eval-header,
+.dashboard-page .arch-hero,
+.winner-banner {
+    background: linear-gradient(135deg, #18181B, #111113) !important;
+}
+.eval-header {
+    margin-bottom: 16px !important;
+    padding: 12px 0 16px !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+.pipeline-panel {
+    background: var(--bg-surface) !important;
+    border-color: var(--border) !important;
+    box-shadow: var(--shadow-card);
+}
+.pipeline-tracker {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+.pipeline-status-text {
+    background: transparent !important;
+    border: 0 !important;
+}
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+[data-testid="stBaseButton-secondary"],
+[data-testid="stTextArea"] textarea,
+[data-testid="stTextInput"] input,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
+    background: var(--bg-subtle) !important;
+    border-color: var(--border-strong) !important;
+    color: var(--text-primary) !important;
+}
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"]:hover,
+[data-testid="stBaseButton-secondary"]:hover,
+.dashboard-table tbody tr:hover td,
+.dim-comment-table tbody tr:hover td {
+    background: #323238 !important;
+    border-color: #52525B !important;
+}
+.dashboard-header-cell,
+.dashboard-table thead th,
+.dim-comment-table thead th {
+    background: var(--bg-subtle) !important;
+    border-color: var(--border) !important;
+    color: var(--text-secondary) !important;
+}
+.dashboard-cell.stable,
+.eval-header p,
+.dashboard-page .arch-hero p,
+.run-label,
+.empty-state,
+.model-label,
+.dim-name,
+.score-dim,
+.activity-label,
+.activity-time,
+.hil-v2-header p,
+.hil-equivalence-row,
+.step-content,
+.dim-tooltip-text,
+.dashboard-metric span,
+.dashboard-metric em,
+.tbl-dim-cell {
+    color: var(--text-secondary) !important;
+}
+.gate2-dispute-title,
+.gate2-summary-card strong {
+    color: var(--text-primary) !important;
+}
+.gate2-dispute-meta span,
+.gate2-summary-card p {
+    color: var(--text-secondary) !important;
+}
+.image-card,
+[data-testid="stImage"] {
+    background: #09090B !important;
+    border-color: #27272A !important;
+}
+.model-label,
+.dim-tooltip {
+    background: #27272A !important;
+    border-color: var(--border-strong) !important;
+}
+.dashboard-winner-pill.gpt,
+.dim-winner-badge.winner-a {
+    color: var(--model-a) !important;
+    background: var(--model-a-soft) !important;
+    border-color: rgba(129,140,248,0.34) !important;
+}
+.dashboard-winner-pill.gemini,
+.dim-winner-badge.winner-b {
+    color: var(--model-b) !important;
+    background: var(--model-b-soft) !important;
+    border-color: rgba(245,158,11,0.34) !important;
+}
+.dashboard-winner-pill.draw,
+.dim-winner-badge.winner-draw {
+    color: var(--text-secondary) !important;
+    background: var(--bg-subtle) !important;
+    border-color: var(--border-strong) !important;
+}
+.dim-score-label.label-a,
+.dim-tooltip-model.tip-a,
+.critique-step.gpt .step-label {
+    color: var(--model-a) !important;
+}
+.dim-score-label.label-b,
+.dim-tooltip-model.tip-b {
+    color: var(--model-b) !important;
+}
+.critique-step.gpt { background: rgba(99,102,241,0.14) !important; }
+.critique-step.revised { background: rgba(34,197,94,0.10) !important; }
+.critique-step.opus { background: rgba(99,102,241,0.10) !important; }
+.dim-comment-table tbody td:nth-child(2) {
+    border-left-color: rgba(129,140,248,0.38) !important;
+    background-image: linear-gradient(90deg, rgba(99,102,241,0.12), transparent 130px) !important;
+}
+.dim-comment-table tbody td:nth-child(3) {
+    border-left-color: rgba(245,158,11,0.38) !important;
+    background-image: linear-gradient(90deg, rgba(245,158,11,0.12), transparent 130px) !important;
+}
