@@ -11,6 +11,7 @@ The primary UI is a bilingual Streamlit dashboard for operating this multi-agent
 ## Snapshots
 
 See the full screenshot gallery in [SNAPSHOTS.md](SNAPSHOTS.md).
+![Dashboard prompt controls and side-by-side generated images](snapshot/Screenshot%202026-05-05%20at%208.22.19%E2%80%AFPM.png)
 
 ## What It Does
 
