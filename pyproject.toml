@@ -1,7 +1,7 @@
 [project]
 name = "evalsimagegen"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "Multi-agent pipeline for evaluating and comparing AI image generation models"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
