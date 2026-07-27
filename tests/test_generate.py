@@ -21,14 +21,14 @@ def test_generate_images_uses_retry_wrapper(tmp_path, monkeypatch):
                 last_error = exc
         raise last_error
 
-    def fake_gpt(prompt: str, output_path: Path, reference_image_path: Path | None = None) -> Path:
+    def fake_gpt(prompt: str, output_path: Path, reference_image_path: Path | None = None, api_model: str | None = None) -> Path:
         calls["gpt"] += 1
         if calls["gpt"] == 1:
             raise RuntimeError("transient GPT failure")
         output_path.write_bytes(b"gpt")
         return output_path
 
-    def fake_gemini(prompt: str, output_path: Path, reference_image_path: Path | None = None) -> Path:
+    def fake_gemini(prompt: str, output_path: Path, reference_image_path: Path | None = None, api_model: str | None = None) -> Path:
         calls["gemini"] += 1
         output_path.write_bytes(b"gemini")
         return output_path
@@ -55,12 +55,12 @@ def test_generate_images_passes_reference_image(tmp_path, monkeypatch):
         retry_attempts.append(max_attempts)
         return fn()
 
-    def fake_gpt(prompt: str, output_path: Path, reference_image_path: Path | None = None) -> Path:
+    def fake_gpt(prompt: str, output_path: Path, reference_image_path: Path | None = None, api_model: str | None = None) -> Path:
         seen.append(("gpt", reference_image_path))
         output_path.write_bytes(b"gpt")
         return output_path
 
-    def fake_gemini(prompt: str, output_path: Path, reference_image_path: Path | None = None) -> Path:
+    def fake_gemini(prompt: str, output_path: Path, reference_image_path: Path | None = None, api_model: str | None = None) -> Path:
         seen.append(("gemini", reference_image_path))
         output_path.write_bytes(b"gemini")
         return output_path

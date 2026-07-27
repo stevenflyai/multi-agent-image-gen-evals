@@ -2,7 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
-The current project version is `0.8`. For every future version update, add a new entry at the top of this file so version changes remain traceable.
+The current project version is `1.0`. For every future version update, add a new entry at the top of this file so version changes remain traceable.
+
+## [1.0] - 2026-07-27
+
+### Added
+
+- Added a LangGraph `StateGraph` orchestrator in [graph_pipeline.py](graph_pipeline.py) as a drop-in alternative to [pipeline.py](pipeline.py): 11 nodes, 6 conditional edges, and the critique/revision cycle expressed as a real loop edge rather than a Python `while`. Both orchestrators write identical run artifacts, so history, dashboard, and reload are unaffected by which one ran.
+- Added checkpointed crash recovery via `SqliteSaver` (`runs/checkpoints.db`, one thread per run). A suspended run survives the death of the process that created it; a cold process resumes without re-running upstream stages, so images already generated are not paid for twice. Threads are retired at `END` and pruned when a run is deleted.
+- Added `interrupt()`-based human-in-the-loop gates. Each gate is split into a compute node (scoring, artifact writes) and a `*_wait` node containing only the interrupt, so resuming replays the wait node and never re-executes the gate computation.
+- Added [orchestrator.py](orchestrator.py) as the single seam app.py calls through, selected by `USE_GRAPH_ORCHESTRATOR` (default off) and read per call.
+- Added support for Claude Opus 5 (`EVAL_MODEL=claude-opus-5`) and GPT-5.6 Sol (`CRITIQUE_MODEL=gpt-5.6-sol`), both exercised in a full live run.
+- Added an **Architecture V3** page documenting the LangGraph topology, and a **Model Pricing Compare** page comparing the image models on a single commercial plane (Azure or Google Cloud Vertex AI).
+- Added [errors.py](errors.py) so `CheckpointMissing` can be caught without importing LangGraph.
+
+### Changed
+
+- Human decisions now affect scoring instead of only being archived. Gate 1 arbitration overrides per-dimension winners while leaving every score as the model produced it; gate 2 adjudication selects, per dimension, whether the round-1 or round-2 revision stands. Previously both gates were write-only in both orchestrators: a reviewer's verdict was persisted to JSON and never read back.
+- Dimension cards and the reasoning table now read the same revision the verdict came from, so an adjudicated dimension no longer shows round 1's score above round 2's argument against it.
+- Raised critique and evaluation token ceilings (`CRITIQUE_MAX_TOKENS`, `CRITIQUE_ROUND2_MAX_TOKENS`, `LLM_MAX_TOKENS`) after reasoning-heavy models exhausted the previous budget before emitting visible output.
+- Dashboard aggregate statistics and history now derive model identity from each run rather than from fixed slots.
+
+### Fixed
+
+- Fixed `graph_pipeline` being imported at module scope in [orchestrator.py](orchestrator.py), which made LangGraph a hard requirement even with the flag off — `streamlit run app.py` failed with `ModuleNotFoundError` on any interpreter without it. The graph is now imported lazily; with the flag on and the dependency missing, the error names the fix instead of silently falling back to the legacy orchestrator.
+- Fixed gate-pending runs rendering as failures; they now show an awaiting-review state.
+- Fixed hardcoded model labels in progress text, prompts, and the dashboard when a non-default model pair is selected.
+
+### Notes
+
+- `USE_GRAPH_ORCHESTRATOR` defaults to **off**; the legacy orchestrator remains the default path. Turning it on requires the project virtualenv (`uv run streamlit run app.py`).
+- The human-pause path is covered by tests (in-memory, SQLite, and cross-process) but has not yet been observed pausing in production: gate 1 has not triggered in 30 real runs (max route score 0.328 against a 0.35 threshold), and the one full live run through the graph cleared both gates.
 
 ## [0.8] - 2026-05-08
 

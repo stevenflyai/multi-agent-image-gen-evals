@@ -18,11 +18,24 @@ from pathlib import Path
 import plotly.graph_objects as go
 import streamlit as st
 
+from config import (
+    CRITIQUE_MODEL,
+    CRITIQUE_ROUND2_MODEL,
+    DEFAULT_MODEL_A,
+    DEFAULT_MODEL_B,
+    IMAGE_GEN_MODELS,
+)
 from i18n import dim_label, get_lang, t
-from pipeline import PipelineResult, resume_pipeline_from_result, run_pipeline
+from orchestrator import CheckpointMissing, continue_run, forget_run, prune_checkpoints, start_run, use_graph
+from pipeline import PipelineResult, _final_revision
 from schemas import DIMENSIONS, HilAdjudication, HilAdjudicationLabel, HilArbitration, HilDimensionArbitration
-from ui_architecture import render_architecture_page, render_architecture_v2_page
-from ui_dashboard import render_dashboard_page
+from ui_architecture import (
+    render_architecture_page,
+    render_architecture_v2_page,
+    render_architecture_v3_page,
+)
+from ui_dashboard import render_dashboard_page, winning_model
+from ui_pricing import render_pricing_page
 from ui_theme import apply_theme_css, is_dark_theme as _is_dark_theme, plotly_theme as _plotly_theme
 
 logger = logging.getLogger(__name__)
@@ -128,6 +141,10 @@ def _load_result_from_dir(run_dir: Path, prompt: str) -> PipelineResult | None:
         result.pipeline_status = summary.get("pipeline_status", result.pipeline_status)
         result.requires_attention = summary.get("requires_attention", result.requires_attention)
         result.prompt_difficulty = summary.get("prompt_difficulty", result.prompt_difficulty)
+        result.model_a_key = summary.get("model_a_key", result.model_a_key)
+        result.model_b_key = summary.get("model_b_key", result.model_b_key)
+        result.model_a_label = summary.get("model_a_label", result.model_a_label)
+        result.model_b_label = summary.get("model_b_label", result.model_b_label)
 
     for gate_file in (run_dir / "gate1_decision.json", run_dir / "gate2_decision.json"):
         if gate_file.exists():
@@ -237,6 +254,10 @@ if "run_progress_snapshots" not in st.session_state:
     st.session_state.run_progress_snapshots = {}
 if "reviewer" not in st.session_state:
     st.session_state.reviewer = "local_reviewer"
+if "model_a_select" not in st.session_state:
+    st.session_state.model_a_select = DEFAULT_MODEL_A
+if "model_b_select" not in st.session_state:
+    st.session_state.model_b_select = DEFAULT_MODEL_B
 if "show_reference_uploader" not in st.session_state:
     st.session_state.show_reference_uploader = False
 if "reference_upload_bytes" not in st.session_state:
@@ -260,6 +281,15 @@ if "history_loaded" not in st.session_state:
         first_run = st.session_state.runs[0]
         st.session_state.focused_run_key = str(first_run.run_dir) if first_run.run_dir else f"{first_run.timestamp}|{first_run.prompt}"
     st.session_state.history_loaded = True
+    # Once per session, drop checkpoints whose run directory is gone — runs
+    # deleted outside the app, or anything that leaked before deletion started
+    # cleaning up. Never fatal: a cleanup failure must not stop the app loading.
+    try:
+        orphans = prune_checkpoints(RUNS_DIR)
+        if orphans:
+            logger.info("Pruned %d orphan checkpoint(s): %s", len(orphans), ", ".join(orphans))
+    except Exception:
+        logger.exception("Orphan checkpoint pruning failed")
 
 HISTORY_STOPWORDS = {
     "a", "an", "the", "and", "or", "but", "with", "without", "of", "for", "to", "in", "on", "at", "by", "from",
@@ -337,6 +367,12 @@ def _forget_run(run_key: str) -> None:
 def _delete_run_record(run: PipelineResult) -> None:
     """Delete one selected run directory and remove only that run from local indexes."""
     run_key = _run_key(run)
+    # Before the directory goes: the orchestrator may hold state keyed on it
+    # (a graph checkpoint thread), which nothing would ever collect afterwards.
+    try:
+        forget_run(run)
+    except Exception:
+        logger.exception("Failed to discard orchestrator state for %s", run_key)
     if run.run_dir:
         run_dir = run.run_dir.resolve()
         runs_root = RUNS_DIR.resolve()
@@ -439,7 +475,6 @@ def _time_ago(iso_ts: str) -> str:
 
 
 # --- Sidebar navigation and history ---
-st.sidebar.markdown(f'<div class="sidebar-product">{esc(t("sidebar_product"))}</div>', unsafe_allow_html=True)
 st.sidebar.markdown(f'<div class="sidebar-section-label">{esc(t("sidebar_navigation"))}</div>', unsafe_allow_html=True)
 _home_active = st.session_state.view_mode == "results"
 if st.sidebar.button(
@@ -479,6 +514,24 @@ if st.sidebar.button(
     st.session_state.view_mode = "architecture_v2"
     st.rerun()
 
+_arch_v3_active = st.session_state.view_mode == "architecture_v3"
+if st.sidebar.button(
+    f"{'▶ ' if _arch_v3_active else ''}{t('nav_architecture_v3')}",
+    key="nav_architecture_v3",
+    use_container_width=True,
+):
+    st.session_state.view_mode = "architecture_v3"
+    st.rerun()
+
+_pricing_active = st.session_state.view_mode == "pricing"
+if st.sidebar.button(
+    f"{'▶ ' if _pricing_active else ''}{t('nav_pricing')}",
+    key="nav_pricing",
+    use_container_width=True,
+):
+    st.session_state.view_mode = "pricing"
+    st.rerun()
+
 st.sidebar.divider()
 st.sidebar.markdown(f'<div class="sidebar-section-label">{esc(t("history_title"))}</div>', unsafe_allow_html=True)
 
@@ -492,16 +545,13 @@ if not _sidebar_runs:
 else:
     for _idx, _run in _sidebar_runs:
         if _run.comparison:
-            _w = _run.comparison.overall_winner
-            if _w == "model_a":
-                _badge = f"● {t('history_winner_a')} ✓"
-                _history_winner_cls = "gpt"
-            elif _w == "model_b":
-                _badge = f"● {t('history_winner_b')} ✓"
-                _history_winner_cls = "gemini"
-            else:
+            _winner = winning_model(_run)
+            if _winner is None:
                 _badge = t("draw_label")
                 _history_winner_cls = "draw"
+            else:
+                _badge = f"● {_winner[1]} ✓"
+                _history_winner_cls = "model"
         else:
             _badge = "—"
             _history_winner_cls = "none"
@@ -590,6 +640,12 @@ if st.session_state.view_mode == "architecture_v1":
 if st.session_state.view_mode == "architecture_v2":
     render_architecture_v2_page()
     st.stop()
+if st.session_state.view_mode == "architecture_v3":
+    render_architecture_v3_page()
+    st.stop()
+if st.session_state.view_mode == "pricing":
+    render_pricing_page()
+    st.stop()
 if st.session_state.view_mode == "dashboard":
     render_dashboard_page(st.session_state.runs, _parse_run_datetime, _history_date_label)
     st.stop()
@@ -666,6 +722,30 @@ with st.container(border=True):
                     st.session_state.show_reference_uploader = False
                     st.rerun()
 
+        _model_keys = list(IMAGE_GEN_MODELS.keys())
+        model_a_col, model_vs_col, model_b_col = st.columns([5, 0.6, 5], vertical_alignment="bottom")
+        with model_a_col:
+            st.selectbox(
+                t("model_a_select"),
+                _model_keys,
+                format_func=lambda k: IMAGE_GEN_MODELS[k]["label"],
+                key="model_a_select",
+                disabled=st.session_state.running,
+            )
+        with model_vs_col:
+            st.markdown(f'<div class="model-vs-label">{esc(t("model_vs"))}</div>', unsafe_allow_html=True)
+        with model_b_col:
+            st.selectbox(
+                t("model_b_select"),
+                _model_keys,
+                format_func=lambda k: IMAGE_GEN_MODELS[k]["label"],
+                key="model_b_select",
+                disabled=st.session_state.running,
+            )
+        models_conflict = st.session_state.model_a_select == st.session_state.model_b_select
+        if models_conflict:
+            st.warning(t("models_must_differ"))
+
         prompt = st.text_area(
             t("prompt_label"),
             placeholder=t("input_placeholder"),
@@ -681,7 +761,7 @@ with st.container(border=True):
             generate_clicked = st.button(
                 t("btn_generate"),
                 type="primary",
-                disabled=st.session_state.running,
+                disabled=st.session_state.running or models_conflict,
                 use_container_width=True,
                 key="composer_generate",
             )
@@ -721,15 +801,63 @@ STAGE_TO_INDEX = {
 }
 
 
+_DEFAULT_LABEL_A = IMAGE_GEN_MODELS[DEFAULT_MODEL_A]["label"]
+_DEFAULT_LABEL_B = IMAGE_GEN_MODELS[DEFAULT_MODEL_B]["label"]
+
+
+def _is_awaiting_hil(result: PipelineResult) -> bool:
+    """Is the run paused for human arbitration rather than finished or failed?
+
+    A paused run has no comparison yet, which is the same shape as a failure —
+    so without this the progress tracker reports a red "pipeline failed" beside
+    the arbitration form. Keyed on the gate object's status, the same source the
+    HIL forms use to decide whether to render.
+    """
+    return any(gate.status == "pending" for gate in result.gate_decisions)
+
+
+def _stage_index(stage_times: list[tuple[str, float, float | None]]) -> int:
+    """Tracker position for the last stage that ran (parks it on the gate)."""
+    return STAGE_TO_INDEX.get(stage_times[-1][0], 0) if stage_times else 0
+
+
+def _critic_model_name(result: PipelineResult | None, round_index: int) -> str:
+    """Critic model for a round: the one the run actually used when available,
+    otherwise the currently configured one (stage messages fire before the
+    critique exists)."""
+    if result and len(result.critiques) > round_index:
+        recorded = result.critiques[round_index].critic_model
+        if recorded:
+            return recorded
+    return CRITIQUE_MODEL if round_index == 0 else CRITIQUE_ROUND2_MODEL
+
+
+def _stage_status_text(
+    stage: str,
+    model_a_label: str = _DEFAULT_LABEL_A,
+    model_b_label: str = _DEFAULT_LABEL_B,
+) -> str:
+    """Stage message for the progress tracker, with the run's generator names filled in."""
+    if stage == "stage_generating":
+        return t(stage, a=model_a_label, b=model_b_label)
+    if stage == "stage_critique":
+        return t(stage, model=CRITIQUE_MODEL)
+    if stage == "stage_critique_round2":
+        return t(stage, model=CRITIQUE_ROUND2_MODEL)
+    return t(stage)
+
+
 def _activity_summary_text(
     stage_times: list[tuple[str, float, float | None]],
     gen_model_done: dict[str, float],
     pipeline_start: float,
     now: float,
+    model_a_label: str = _DEFAULT_LABEL_A,
+    model_b_label: str = _DEFAULT_LABEL_B,
 ) -> str:
     parts = []
     if gen_model_done:
-        for model_key, label in (("gpt_image_2", "GPT"), ("gemini_3_pro", "Gemini")):
+        for model_key, label in (("gpt_image_2", model_a_label), ("gemini_3_pro", model_b_label)):
             done_at = gen_model_done.get(model_key)
             if done_at is not None:
                 parts.append(f"{label} {max(done_at - pipeline_start, 0.0):.1f}s")
@@ -791,14 +919,16 @@ def _render_activity_log(
     now: float,
     *,
     historical: bool = False,
+    model_a_label: str = _DEFAULT_LABEL_A,
+    model_b_label: str = _DEFAULT_LABEL_B,
 ) -> str:
     """Build HTML for the right-side activity log with per-stage timing."""
     items_html = []
     for stage, start, end in stage_times:
         if stage == "stage_generating":
             for model_key, model_label in [
-                ("gpt_image_2", "GPT Image-2"),
-                ("gemini_3_pro", "Gemini 3 Pro"),
+                ("gpt_image_2", model_a_label),
+                ("gemini_3_pro", model_b_label),
             ]:
                 done_t = gen_model_done.get(model_key)
                 if historical and done_t is not None:
@@ -896,7 +1026,10 @@ def _build_historical_progress_snapshot(result: PipelineResult) -> dict | None:
     historical_summary = t("activity_total_time", s=f"{max(now - base_time, 0.0):.1f}s")
     return {
         "progress": _render_progress(_DONE_INDEX, t("status_done"), historical_summary),
-        "activity": _render_activity_log(stage_times, gen_model_done, base_time, now, historical=True),
+        "activity": _render_activity_log(
+            stage_times, gen_model_done, base_time, now, historical=True,
+            model_a_label=result.model_a_label, model_b_label=result.model_b_label,
+        ),
     }
 
 
@@ -912,6 +1045,14 @@ def _progress_snapshot_for_result(result: PipelineResult) -> dict | None:
 
 
 run_prompt = selected_prebaked_result.prompt if rerun_selected_clicked and selected_prebaked_result is not None else prompt.strip()
+if rerun_selected_clicked and selected_prebaked_result is not None:
+    run_model_a = selected_prebaked_result.model_a_key
+    run_model_b = selected_prebaked_result.model_b_key
+else:
+    run_model_a = st.session_state.model_a_select
+    run_model_b = st.session_state.model_b_select
+run_model_a_label = IMAGE_GEN_MODELS.get(run_model_a, {}).get("label", run_model_a)
+run_model_b_label = IMAGE_GEN_MODELS.get(run_model_b, {}).get("label", run_model_b)
 run_reference_image_bytes = None
 run_reference_image_name = None
 if rerun_selected_clicked and selected_prebaked_result is not None and selected_prebaked_result.reference_image_path:
@@ -921,7 +1062,9 @@ elif not rerun_selected_clicked and st.session_state.reference_upload_bytes:
     run_reference_image_bytes = st.session_state.reference_upload_bytes
     run_reference_image_name = st.session_state.reference_upload_name
 
-if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
+if (generate_clicked or rerun_selected_clicked) and run_prompt.strip() and run_model_a == run_model_b:
+    st.warning(t("models_must_differ"))
+elif (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
     st.session_state.running = True
 
     status_container = st.empty()
@@ -952,12 +1095,14 @@ if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
 
     def _run_pipeline() -> None:
         try:
-            _result_holder["result"] = run_pipeline(
+            _result_holder["result"] = start_run(
                 run_prompt.strip(),
                 on_stage=_on_stage,
                 on_image_done=_on_image_done,
                 reference_image=run_reference_image_bytes,
                 reference_image_name=run_reference_image_name,
+                model_a=run_model_a,
+                model_b=run_model_b,
             )
         except Exception as e:
             _result_holder["error"] = e
@@ -975,7 +1120,7 @@ if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
         _active_stage = _st[-1][0] if _st else "status_running"
         _active_idx = STAGE_TO_INDEX.get(_active_stage, 0)
         status_container.markdown(
-            _render_progress(_active_idx, t(_active_stage), _activity_summary_text(_st, _gmd, pipeline_start, _now)),
+            _render_progress(_active_idx, _stage_status_text(_active_stage, run_model_a_label, run_model_b_label), _activity_summary_text(_st, _gmd, pipeline_start, _now, run_model_a_label, run_model_b_label)),
             unsafe_allow_html=True,
         )
 
@@ -991,12 +1136,14 @@ if (generate_clicked or rerun_selected_clicked) and run_prompt.strip():
     if "result" in _result_holder:
         completed_result = _result_holder["result"]
         completed_run_key = _run_key(completed_result)
-        if completed_result.pipeline_status == "failed" or not completed_result.comparison:
+        if _is_awaiting_hil(completed_result):
+            progress_html = _render_progress(_stage_index(_st), t("status_awaiting_hil"), _activity_summary_text(_st, _gmd, pipeline_start, _now, run_model_a_label, run_model_b_label))
+        elif completed_result.pipeline_status == "failed" or not completed_result.comparison:
             error_text = _display_errors(completed_result.errors) if completed_result.errors else t("error_image_failed")
-            progress_html = _render_progress(0, t("error_pipeline_failed", error=error_text), _activity_summary_text(_st, _gmd, pipeline_start, _now))
+            progress_html = _render_progress(0, t("error_pipeline_failed", error=error_text), _activity_summary_text(_st, _gmd, pipeline_start, _now, run_model_a_label, run_model_b_label))
         else:
-            progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, _gmd, pipeline_start, _now))
-            activity_html = _render_activity_log(_st, _gmd, pipeline_start, _now)
+            progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, _gmd, pipeline_start, _now, run_model_a_label, run_model_b_label))
+            activity_html = _render_activity_log(_st, _gmd, pipeline_start, _now, model_a_label=run_model_a_label, model_b_label=run_model_b_label)
             st.session_state.run_progress_snapshots[completed_run_key] = {
                 "progress": progress_html,
                 "activity": activity_html,
@@ -1031,7 +1178,13 @@ if not _focused_entry:
 # --- Render results ---
 
 
-def _resume_run_with_progress(result: PipelineResult) -> None:
+def _resume_run_with_progress(result: PipelineResult, resume_payload: dict | None = None) -> None:
+    """Continue a run and render progress.
+
+    `resume_payload` carries a human's HIL decision (gate arbitration or
+    adjudication); omitting it means "rerun from failed step". See
+    orchestrator.continue_run for how the two map onto each orchestrator.
+    """
     st.session_state.running = True
     status_container = st.empty()
     status_container.markdown(
@@ -1061,10 +1214,11 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
 
     def _run_resume() -> None:
         try:
-            _result_holder["result"] = resume_pipeline_from_result(
+            _result_holder["result"] = continue_run(
                 result,
                 on_stage=_on_stage,
                 on_image_done=_on_image_done,
+                resume_payload=resume_payload,
             )
         except Exception as e:
             _result_holder["error"] = e
@@ -1082,7 +1236,7 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
         _active_stage = _st[-1][0] if _st else "status_rerunning"
         _active_idx = STAGE_TO_INDEX.get(_active_stage, 0)
         status_container.markdown(
-            _render_progress(_active_idx, t(_active_stage), _activity_summary_text(_st, _gmd, pipeline_start, _now)),
+            _render_progress(_active_idx, _stage_status_text(_active_stage, result.model_a_label, result.model_b_label), _activity_summary_text(_st, _gmd, pipeline_start, _now, result.model_a_label, result.model_b_label)),
             unsafe_allow_html=True,
         )
 
@@ -1098,12 +1252,14 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
     if "result" in _result_holder:
         resumed_result = _result_holder["result"]
         resumed_run_key = _run_key(resumed_result)
-        if resumed_result.pipeline_status == "failed" or not resumed_result.comparison:
+        if _is_awaiting_hil(resumed_result):
+            progress_html = _render_progress(_stage_index(_st), t("status_awaiting_hil"), _activity_summary_text(_st, _gmd, pipeline_start, _now, result.model_a_label, result.model_b_label))
+        elif resumed_result.pipeline_status == "failed" or not resumed_result.comparison:
             error_text = _display_errors(resumed_result.errors) if resumed_result.errors else t("error_image_failed")
-            progress_html = _render_progress(0, t("error_pipeline_failed", error=error_text), _activity_summary_text(_st, _gmd, pipeline_start, _now))
+            progress_html = _render_progress(0, t("error_pipeline_failed", error=error_text), _activity_summary_text(_st, _gmd, pipeline_start, _now, result.model_a_label, result.model_b_label))
         else:
-            progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, _gmd, pipeline_start, _now))
-            activity_html = _render_activity_log(_st, _gmd, pipeline_start, _now)
+            progress_html = _render_progress(_DONE_INDEX, t("status_done"), _activity_summary_text(_st, _gmd, pipeline_start, _now, result.model_a_label, result.model_b_label))
+            activity_html = _render_activity_log(_st, _gmd, pipeline_start, _now, model_a_label=result.model_a_label, model_b_label=result.model_b_label)
             st.session_state.run_progress_snapshots[resumed_run_key] = {
                 "progress": progress_html,
                 "activity": activity_html,
@@ -1113,8 +1269,25 @@ def _resume_run_with_progress(result: PipelineResult) -> None:
         status_container.markdown(progress_html, unsafe_allow_html=True)
     else:
         err = _result_holder.get("error", Exception("Unknown error"))
-        logger.exception("Pipeline resume failed")
-        st.error(t("error_pipeline_failed", error=_display_error(str(err))))
+        if isinstance(err, CheckpointMissing):
+            # Not a failure: this run has no checkpoint left to resume, which
+            # normally means it already finished — e.g. a second tab still
+            # showing a gate form someone else already submitted. Refresh the
+            # in-memory copy from disk so the stale form stops re-appearing,
+            # otherwise the user loops on submit -> error -> submit.
+            logger.info("Resume skipped for %s: no checkpoint to resume", _run_key(result))
+            refreshed = None
+            if result.run_dir and result.run_dir.exists():
+                try:
+                    refreshed = _load_result_from_dir(result.run_dir, result.prompt)
+                except Exception:
+                    logger.exception("Could not refresh %s from disk", _run_key(result))
+            if refreshed:
+                _remember_run(refreshed)
+            st.info(t("resume_already_resolved"))
+        else:
+            logger.exception("Pipeline resume failed")
+            st.error(t("error_pipeline_failed", error=_display_error(str(err))))
 
     st.session_state.running = False
     st.rerun()
@@ -1166,14 +1339,14 @@ def render_result(result: PipelineResult, index: int) -> None:
         col_a = image_columns[1] if reference_path else image_columns[0]
         col_b = image_columns[2] if reference_path else image_columns[1]
         with col_a:
-            st.markdown(f'<div class="model-label">{t("model_gpt")}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="model-label">{esc(result.model_a_label)}</div>', unsafe_allow_html=True)
             if isinstance(gpt_path, Path) and gpt_path.exists():
                 st.image(str(gpt_path), use_container_width=True)
             else:
                 st.markdown(f'<div class="error-card"><div class="error-text">⚠ {t("error_image_failed")}</div></div>', unsafe_allow_html=True)
 
         with col_b:
-            st.markdown(f'<div class="model-label">{t("model_gemini")}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="model-label">{esc(result.model_b_label)}</div>', unsafe_allow_html=True)
             if isinstance(gemini_path, Path) and gemini_path.exists():
                 st.image(str(gemini_path), use_container_width=True)
             else:
@@ -1198,18 +1371,19 @@ def render_result(result: PipelineResult, index: int) -> None:
     winner_name = winner_display.get(comp.overall_winner, esc(comp.overall_winner))
     dims_won = comp.model_a_dimensions_won if comp.overall_winner == "model_a" else comp.model_b_dimensions_won
     unchallenged_note = f' <span class="unchallenged">{t("unchallenged")}</span>' if is_unchallenged else ""
+    human_note = f' <span class="human-influenced-note">{t("human_influenced_note")}</span>' if comp.human_influenced else ""
 
     if comp.overall_winner == "draw":
         st.markdown(f"""
         <div class="winner-banner">
-            <span class="winner-name">{t("draw_label")}</span> | {t("overall_label", a=comp.model_a_mean, b=comp.model_b_mean)}{unchallenged_note}
+            <span class="winner-name">{t("draw_label")}</span> | {t("overall_label", a=comp.model_a_mean, b=comp.model_b_mean)}{unchallenged_note}{human_note}
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown(f"""
         <div class="winner-banner">
             {t("winner_label")}<span class="winner-name">{winner_name}</span>
-            ({t("dimensions_won", count=dims_won)}) | {t("overall_label", a=comp.model_a_mean, b=comp.model_b_mean)}{unchallenged_note}
+            ({t("dimensions_won", count=dims_won)}) | {t("overall_label", a=comp.model_a_mean, b=comp.model_b_mean)}{unchallenged_note}{human_note}
         </div>
         """, unsafe_allow_html=True)
 
@@ -1287,6 +1461,14 @@ def render_gate1_hil_task(result: PipelineResult) -> None:
                 for dimension, winner in selections.items()
             ],
         )
+        if use_graph():
+            # The graph owns the write: gate1_wait_node persists hil_review_r1.json
+            # and rewrites gate1_decision.json once the payload reaches its
+            # interrupt(). Writing here too would double-write, and the in-memory
+            # gate mutation would be overwritten by the checkpointed state anyway.
+            _resume_run_with_progress(result, resume_payload=hil_review.model_dump())
+            return
+
         result.hil_reviews = [hil_review]
         gate1.status = "completed"
         gate1.pipeline_status = None
@@ -1388,6 +1570,13 @@ def _critique_summary_html(label: str, critique_item) -> str:
 
 
 def _gate2_dispute_summary_html(result: PipelineResult, dimensions: list[str]) -> str:
+    """What the reviewer sees while deciding gate 2.
+
+    The helpers below read revisions[-1] deliberately: this renders only while
+    the gate is pending, before round 2's revision exists, so revisions[-1] is
+    round 1 — the "06" column the reviewer is being asked about. Post-completion
+    views must use _reasoning_source() instead.
+    """
     if not dimensions:
         return ""
     critique_r1 = result.critiques[0] if result.critiques else None
@@ -1470,6 +1659,11 @@ def render_gate2_hil_task(result: PipelineResult) -> None:
                 for dimension, label in selections.items()
             ],
         )
+        if use_graph():
+            # gate2_wait_node owns these writes; see the gate 1 form for why.
+            _resume_run_with_progress(result, resume_payload=adjudication.model_dump())
+            return
+
         result.hil_adjudication = adjudication
         gate2.status = "completed"
         gate2.pipeline_status = None
@@ -1628,6 +1822,18 @@ def render_radar_chart(result: PipelineResult) -> None:
     st.plotly_chart(fig, use_container_width=True, key=f"radar_{id(result)}")
 
 
+def _reasoning_source(result: PipelineResult):
+    """The revision whose text belongs beside the scores on screen.
+
+    Cards and the comment table read scores from comparison.dimension_results,
+    which determine_winner() built from the gate-2-composed revision — not from
+    revisions[-1]. A dimension the reviewer took from round 1 would otherwise
+    show round 1's score above round 2's argument against it.
+    """
+    final = _final_revision(result)
+    return final.model_a, final.model_b
+
+
 def _get_reasoning(dim_score) -> str:
     """Return reasoning in the current UI language, falling back to English."""
     if get_lang() == "zh" and getattr(dim_score, "reasoning_zh", ""):
@@ -1642,10 +1848,10 @@ def render_dimension_cards(result: PipelineResult) -> None:
 
     comp = result.comparison
 
-    # Reasoning source: final revision if available, else initial eval
+    # Reasoning source: the same revision the scores came from (see
+    # _reasoning_source), else the initial eval.
     if result.revisions:
-        src_a = result.revisions[-1].model_a
-        src_b = result.revisions[-1].model_b
+        src_a, src_b = _reasoning_source(result)
     elif result.eval_a and result.eval_b:
         src_a = result.eval_a
         src_b = result.eval_b
@@ -1669,6 +1875,10 @@ def render_dimension_cards(result: PipelineResult) -> None:
                 badge = f'<span class="dim-winner-badge winner-b">{esc(comp.model_b_name.split()[0])} ▲</span>'
             else:
                 badge = '<span class="dim-winner-badge winner-draw">Draw</span>'
+            if dr.human_decided:
+                # A human's call can award the dimension to the lower score, which
+                # reads as a bug without this marker.
+                badge += f'<span class="dim-winner-badge human-decided" title="{esc(t("human_decided_help"))}">⚖</span>'
 
             if src_a and src_b:
                 ra = getattr(src_a, dr.dimension)
@@ -1714,8 +1924,7 @@ def render_dimension_comments_table(result: PipelineResult) -> None:
 
     comp = result.comparison
     if result.revisions:
-        src_a = result.revisions[-1].model_a
-        src_b = result.revisions[-1].model_b
+        src_a, src_b = _reasoning_source(result)
     elif result.eval_a and result.eval_b:
         src_a = result.eval_a
         src_b = result.eval_b
@@ -1775,6 +1984,7 @@ def render_critique_transcript(result: PipelineResult) -> None:
         for round_idx, crit in enumerate(result.critiques):
             # Critique step
             step_label_key = "step2_label" if round_idx == 0 else "step4_label"
+            step_label_text = esc(t(step_label_key, model=crit.critic_model or _critic_model_name(result, round_idx)))
             css_class = "gpt" if round_idx == 0 else "revised"
 
             critique_parts = [
@@ -1793,7 +2003,7 @@ def render_critique_transcript(result: PipelineResult) -> None:
 
             st.markdown(f"""
             <div class="critique-step {css_class}">
-                <div class="step-label">{t(step_label_key)}</div>
+                <div class="step-label">{step_label_text}</div>
                 <div class="step-content">{"".join(critique_parts)}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1826,7 +2036,7 @@ def render_critique_transcript(result: PipelineResult) -> None:
         if not result.critiques:
             st.markdown(f"""
             <div class="critique-step gpt">
-                <div class="step-label">{t("step2_label")}</div>
+                <div class="step-label">{esc(t("step2_label", model=_critic_model_name(result, 0)))}</div>
                 <div class="step-content" style="color:#ffb347;">{t("step2_unavailable")}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1846,7 +2056,7 @@ def render_raw_json(result: PipelineResult) -> None:
                 })
 
     with col2:
-        with st.expander(t("json_critique")):
+        with st.expander(t("json_critique", model=_critic_model_name(result, 0))):
             if result.critiques:
                 st.json(result.critiques[0].model_dump())
             else:
@@ -1863,7 +2073,7 @@ def render_raw_json(result: PipelineResult) -> None:
     if len(result.critiques) > 1 or len(result.revisions) > 1:
         col4, col5, _col6 = st.columns(3)
         with col4:
-            with st.expander(t("json_critique_r2")):
+            with st.expander(t("json_critique_r2", model=_critic_model_name(result, 1))):
                 if len(result.critiques) > 1:
                     st.json(result.critiques[1].model_dump())
                 else:

@@ -132,3 +132,92 @@ def render_architecture_v2_page() -> None:
         </div>
     </section>
     """, unsafe_allow_html=True)
+
+
+def render_architecture_v3_page() -> None:
+    """Render the LangGraph orchestration overview.
+
+    Mirrors graph_pipeline.build_graph() rather than the conceptual pipeline: the
+    node names, the compute/wait split at each gate, the revise -> critique cycle
+    and the three terminals are the ones actually compiled into the StateGraph,
+    so this page goes stale loudly if the topology changes.
+    """
+    st.markdown(f"""
+    <section class="arch-page arch-v2-page arch-v3-page">
+        <div class="arch-hero">
+            <div>
+                <div class="arch-kicker">{esc(t("nav_architecture_v3"))}</div>
+                <h2>{esc(t("arch_v3_title"))}</h2>
+                <p>{esc(t("arch_v3_subtitle"))}</p>
+            </div>
+        </div>
+        <div class="arch-flow arch-v2-flow arch-v3-flow" aria-label="LangGraph orchestration architecture">
+            <div class="arch-v2-legend" style="--step:0">
+                <span><i class="agent"></i>{esc(t("arch_v3_legend_compute"))}</span>
+                <span><i class="wait"></i>{esc(t("arch_v3_legend_wait"))}</span>
+                <span><i class="gate"></i>{esc(t("arch_v3_legend_router"))}</span>
+                <span><i class="storage"></i>{esc(t("arch_v3_legend_state"))}</span>
+                <span><i class="terminal"></i>{esc(t("arch_v3_legend_terminal"))}</span>
+            </div>
+            <div class="arch-v2-group entries" style="--step:1">
+                <div class="arch-v2-group-label">{esc(t("arch_v3_entry_label"))}</div>
+                <div class="arch-v3-entry-row">
+                    <div class="arch-node entry"><span>IN</span><strong>{esc(t("arch_v3_entry_run"))}</strong><em>{esc(t("arch_v3_entry_run_detail"))}</em></div>
+                    <div class="arch-node entry"><span>IN</span><strong>{esc(t("arch_v3_entry_resume"))}</strong><em>{esc(t("arch_v3_entry_resume_detail"))}</em></div>
+                    <div class="arch-node entry"><span>IN</span><strong>{esc(t("arch_v3_entry_retry"))}</strong><em>{esc(t("arch_v3_entry_retry_detail"))}</em></div>
+                </div>
+            </div>
+            <div class="arch-v2-arrow split-join" style="--step:2"></div>
+            <div class="arch-node seam" style="--step:3"><span>SEAM</span><strong>{esc(t("arch_v3_seam"))}</strong><em>{esc(t("arch_v3_seam_detail"))}</em></div>
+            <div class="arch-v2-arrow" style="--step:4"></div>
+            <div class="arch-v2-group graph" style="--step:5">
+                <div class="arch-v2-group-label">{esc(t("arch_v3_graph_label"))}</div>
+                <div class="arch-v3-terminus start">START</div>
+                <div class="arch-v2-arrow slim"></div>
+                <div class="arch-node gen-a"><span>01</span><strong>{esc(t("arch_v3_generate"))}</strong><em>{esc(t("arch_v3_generate_detail"))}</em></div>
+                <div class="arch-v2-arrow slim"></div>
+                <div class="arch-node evaluator"><span>02</span><strong>{esc(t("arch_v3_evaluate"))}</strong><em>{esc(t("arch_v3_evaluate_detail"))}</em></div>
+                <div class="arch-v2-arrow slim"></div>
+                <div class="arch-v3-gate-pair">
+                    <div class="arch-node gate"><span>G1</span><strong>{esc(t("arch_v3_gate1"))}</strong><em>{esc(t("arch_v3_gate1_detail"))}</em></div>
+                    <div class="arch-v3-hop" data-label="{esc(t("arch_v3_route_pending"))}"></div>
+                    <div class="arch-node wait"><span>⏸</span><strong>{esc(t("arch_v3_gate1_wait"))}</strong><em>{esc(t("arch_v3_gate1_wait_detail"))}</em></div>
+                </div>
+                <div class="arch-v3-rejoin" data-label="{esc(t("arch_v3_route_clear"))} / {esc(t("arch_v3_route_resume"))}"></div>
+                <div class="arch-v3-cycle">
+                    <div class="arch-node critic"><span>03</span><strong>{esc(t("arch_v3_critique"))}</strong><em>{esc(t("arch_v3_critique_detail"))}</em></div>
+                    <div class="arch-v2-arrow slim"></div>
+                    <div class="arch-v3-gate-pair">
+                        <div class="arch-node gate"><span>G2</span><strong>{esc(t("arch_v3_gate2"))}</strong><em>{esc(t("arch_v3_gate2_detail"))}</em></div>
+                        <div class="arch-v3-hop" data-label="{esc(t("arch_v3_route_pending"))}"></div>
+                        <div class="arch-node wait"><span>⏸</span><strong>{esc(t("arch_v3_gate2_wait"))}</strong><em>{esc(t("arch_v3_gate2_wait_detail"))}</em></div>
+                    </div>
+                    <div class="arch-v3-rejoin" data-label="{esc(t("arch_v3_route_clear"))} / {esc(t("arch_v3_route_resume"))}"></div>
+                    <div class="arch-node revise"><span>04</span><strong>{esc(t("arch_v3_revise"))}</strong><em>{esc(t("arch_v3_revise_detail"))}</em></div>
+                    <div class="arch-v3-loop">
+                        <span class="arch-v3-loop-label">{esc(t("arch_v3_loop"))}</span>
+                        <em>{esc(t("arch_v3_loop_detail"))}</em>
+                    </div>
+                </div>
+                <div class="arch-v2-arrow slim"></div>
+                <div class="arch-v3-terminal-row">
+                    <div class="arch-node compare"><span>05</span><strong>{esc(t("arch_v3_compare"))}</strong><em>{esc(t("arch_v3_compare_detail"))}</em></div>
+                    <div class="arch-node fallback"><span>!</span><strong>{esc(t("arch_v3_fallback"))}</strong><em>{esc(t("arch_v3_fallback_detail"))}</em></div>
+                    <div class="arch-node failed"><span>✕</span><strong>{esc(t("arch_v3_fail"))}</strong><em>{esc(t("arch_v3_fail_detail"))}</em></div>
+                </div>
+                <div class="arch-v2-arrow slim"></div>
+                <div class="arch-v3-terminus end">END</div>
+            </div>
+            <div class="arch-v2-arrow" style="--step:6"></div>
+            <div class="arch-v2-group state" style="--step:7">
+                <div class="arch-v2-group-label">{esc(t("arch_v3_state_label"))}</div>
+                <div class="arch-v3-state-grid">
+                    <div class="arch-node persist"><span>DB</span><strong>{esc(t("arch_v3_state_ckpt"))}</strong><em>{esc(t("arch_v3_state_ckpt_detail"))}</em></div>
+                    <div class="arch-node persist"><span>FS</span><strong>{esc(t("arch_v3_state_artifacts"))}</strong><em>{esc(t("arch_v3_state_artifacts_detail"))}</em></div>
+                    <div class="arch-node hil"><span>H1</span><strong>{esc(t("arch_v3_state_hil1"))}</strong><em>{esc(t("arch_v3_state_hil1_detail"))}</em></div>
+                    <div class="arch-node hil"><span>H2</span><strong>{esc(t("arch_v3_state_hil2"))}</strong><em>{esc(t("arch_v3_state_hil2_detail"))}</em></div>
+                </div>
+            </div>
+        </div>
+    </section>
+    """, unsafe_allow_html=True)

@@ -7,13 +7,37 @@
     max-width: 1200px;
     padding-top: 0.75rem !important;
 }
-[data-testid="stHeader"],
-[data-testid="stToolbar"],
+/* Hide Streamlit's top-bar clutter (Deploy, hamburger menu, status, rainbow
+   decoration) but DO NOT blanket-hide stHeader/stToolbar: the sidebar expand
+   control lives inside the toolbar, and hiding its parent makes a collapsed
+   sidebar impossible to reopen. */
 [data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stToolbarActions"],
+[data-testid="stHeaderActionElements"],
+[data-testid="stDeployButton"],
+[data-testid="stAppDeployButton"],
 #MainMenu {
     display: none !important;
     visibility: hidden !important;
+}
+[data-testid="stHeader"],
+[data-testid="stToolbar"] {
+    background: transparent !important;
+    box-shadow: none !important;
     height: 0 !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+}
+/* Keep the collapse/expand control visible so a collapsed sidebar can always
+   be reopened. */
+[data-testid="stExpandSidebarButton"],
+[data-testid="stSidebarCollapseButton"] {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    z-index: 1000 !important;
 }
 section.main > div {
     padding-top: 0 !important;
@@ -23,12 +47,6 @@ section.main > div {
 .eval-header { margin-bottom: 16px; border-bottom: 1px solid #333; padding: 12px 0 16px; }
 .eval-header h1 { font-size: 20px; font-weight: 650; letter-spacing: 0; color: #e8ebff; margin: 0; }
 .eval-header p { font-size: 13px; color: #8888cc; margin: 4px 0 0; }
-.sidebar-product {
-    padding: 4px 2px 12px;
-    color: #e8ebff;
-    font-size: 14px;
-    font-weight: 800;
-}
 .sidebar-section-label,
 .control-card-title {
     color: #8888cc;
@@ -736,6 +754,7 @@ section.main > div {
 
 /* Image cards */
 .model-label { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #8888cc; margin-bottom: 8px; }
+.model-vs-label { text-align: center; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #8888cc; padding-bottom: 8px; }
 .image-card { background: #16213e; border: 1px solid #333; border-radius: 8px; padding: 16px; }
 
 /* Uniform image containers */
@@ -989,6 +1008,17 @@ section.main > div {
 .dim-winner-badge.winner-a { background: rgba(54,87,214,0.12); color: #243b9a; border: 1px solid rgba(54,87,214,0.32); }
 .dim-winner-badge.winner-b { background: #FEF3C7; color: #D97706; border: 1px solid rgba(217,119,6,0.30); }
 .dim-winner-badge.winner-draw { background: rgba(150,150,150,0.15); color: #aaa; border: 1px solid #444; }
+/* Marks a dimension whose winner a human set at Gate 1 — without it the card can
+   show the lower score winning with no explanation. Neutral, not a series color. */
+.dim-winner-badge.human-decided {
+    margin-left: 5px;
+    padding: 2px 5px;
+    background: rgba(136,136,204,0.16);
+    color: var(--text-secondary, #8a8a99);
+    border: 1px solid rgba(136,136,204,0.35);
+    cursor: help;
+}
+.human-influenced-note { opacity: 0.72; font-size: 12px; font-style: italic; }
 .dim-score-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 6px; }
 .dim-score-label { font-size: 12px; font-weight: 600; }
 .dim-score-label.label-a { color: #3657d6; }
@@ -1317,21 +1347,32 @@ section.main > div {
     font-size: 12px;
     font-weight: 800;
     white-space: nowrap;
+    /* Model names vary in length; clip inside the pill rather than overflowing
+       the column and colliding with the next cell. */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.dashboard-winner-pill.gpt {
-    color: #dce2ff;
-    background: rgba(92,114,255,0.18);
-    border: 1px solid rgba(92,114,255,0.44);
-}
-.dashboard-winner-pill.gemini {
-    color: #D97706;
-    background: #FEF3C7;
-    border: 1px solid rgba(217,119,6,0.30);
+/* Model identity is carried by --pill-color, set per model in ui_theme.model_color(),
+   so any number of models render from one rule instead of a class per model. */
+.dashboard-winner-pill {
+    color: var(--pill-color, #dce2ff);
+    background: color-mix(in srgb, var(--pill-color, #5c72ff) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--pill-color, #5c72ff) 42%, transparent);
 }
 .dashboard-winner-pill.draw {
     color: #dddff8;
     background: rgba(136,136,204,0.14);
     border: 1px solid rgba(136,136,204,0.35);
+}
+.dashboard-model-swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 3px;
+    margin-right: 7px;
+    vertical-align: middle;
+    background: var(--pill-color, #5c72ff);
 }
 .dashboard-table {
     width: 100%;
@@ -1849,16 +1890,6 @@ section.main > div {
 .dashboard-table tbody tr:hover td {
     background: #f1f5f9 !important;
 }
-.dashboard-winner-pill.gpt {
-    color: #243b9a;
-    background: rgba(59,91,219,0.12);
-    border-color: rgba(59,91,219,0.32);
-}
-.dashboard-winner-pill.gemini {
-    color: #087a54;
-    background: rgba(15,159,110,0.12);
-    border-color: rgba(15,159,110,0.32);
-}
 .dashboard-winner-pill.draw {
     color: #475569;
     background: #f1f5f9;
@@ -2143,17 +2174,6 @@ section.main > div {
     background: var(--bg-surface);
     border-color: var(--border);
 }
-.dashboard-winner-pill.gpt {
-    color: var(--model-a);
-    background: var(--model-a-soft);
-    border-color: rgba(79,70,229,0.28);
-}
-.dashboard-winner-pill.gemini {
-    color: var(--model-b);
-    background: var(--model-b-soft);
-    border-color: rgba(217,119,6,0.30);
-}
-
 .image-card,
 [data-testid="stImage"] {
     background: #18181B !important;
@@ -2264,13 +2284,17 @@ section.main > div {
 [data-testid="stAppViewBlockContainer"] {
     padding-top: 0.75rem !important;
 }
-[data-testid="stHeader"],
-[data-testid="stToolbar"],
+/* stHeader/stToolbar intentionally omitted here — see the header rules near the
+   top of this file that keep the sidebar expand control reachable. */
 [data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stToolbarActions"],
+[data-testid="stHeaderActionElements"],
+[data-testid="stDeployButton"],
+[data-testid="stAppDeployButton"],
 #MainMenu {
     display: none !important;
     visibility: hidden !important;
-    height: 0 !important;
 }
 .eval-header {
     margin-bottom: 16px !important;
@@ -2290,9 +2314,6 @@ section.main > div {
 .eval-header p {
     font-size: 13px !important;
     margin: 4px 0 0 !important;
-}
-.sidebar-product {
-    color: var(--text-primary) !important;
 }
 .sidebar-section-label,
 .control-card-title {
@@ -2425,4 +2446,446 @@ section.main > div {
     .step-connector {
         min-width: 28px;
     }
+}
+
+/* Architecture V3 — LangGraph orchestration.
+   Reuses the V2 node/arrow/group primitives so the entrance animation and
+   timing are identical; only the shapes V2 has no analogue for are new. */
+.arch-v2-legend i.wait {
+    border-color: #ffb347;
+    border-style: dashed;
+    background: rgba(255,179,71,0.10);
+}
+.arch-v2-legend i.terminal { border-color: #6f749b; background: rgba(111,116,155,0.18); }
+
+.arch-v3-flow .arch-v2-group { width: min(880px, 100%); }
+.arch-v3-flow .arch-v2-group.graph {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 30px 18px 20px;
+    border-style: solid;
+    border-color: rgba(124,109,255,0.34);
+}
+.arch-v3-flow .arch-v2-group.graph > .arch-node { width: min(520px, 100%); }
+
+.arch-v3-entry-row,
+.arch-v3-terminal-row,
+.arch-v3-state-grid {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+}
+.arch-v3-entry-row,
+.arch-v3-terminal-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.arch-v3-state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.arch-v3-entry-row .arch-node,
+.arch-v3-terminal-row .arch-node,
+.arch-v3-state-grid .arch-node { width: 100%; min-width: 0; }
+
+.arch-node.entry { border-left-color: #4ecdc4; }
+.arch-node.seam { border-left-color: #a090ff; width: min(560px, 100%); }
+.arch-node.fallback { border-left-color: #ffb347; }
+.arch-node.failed { border-left-color: #ff7a7a; }
+.arch-node.wait {
+    border-left-color: #ffb347;
+    border-style: dashed;
+    background: linear-gradient(135deg, rgba(82,55,24,0.62), #111832);
+}
+/* The pause is the point of the node, so make it read as paused rather than
+   flowing: the sheen sweep every other node gets is suppressed here. */
+.arch-node.wait::after { display: none; }
+.arch-node.wait span {
+    background: rgba(255,179,71,0.18);
+    border-color: rgba(255,179,71,0.55);
+    animation: arch-flow-pulse 1.9s ease-in-out infinite;
+}
+
+/* START / END caps */
+.arch-v3-terminus {
+    position: relative;
+    z-index: 1;
+    padding: 5px 18px;
+    border-radius: 999px;
+    border: 1px solid #3a3f68;
+    background: rgba(255,255,255,0.04);
+    color: #cdd2ef;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.6px;
+}
+.arch-v3-terminus.start { border-color: rgba(78,205,196,0.55); color: #7ef6e0; }
+.arch-v3-terminus.end { border-color: rgba(124,109,255,0.55); color: #c6c2ff; }
+
+/* gate compute -> wait, side by side with a labelled hop between them */
+.arch-v3-gate-pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+.arch-v3-gate-pair .arch-node { width: 100%; min-width: 0; }
+.arch-v3-hop {
+    position: relative;
+    height: 2px;
+    min-width: 66px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(78,205,196,0.85), rgba(255,179,71,0.85));
+    box-shadow: 0 0 12px rgba(255,179,71,0.32);
+    animation: arch-flow-pulse 1.7s ease-in-out infinite;
+}
+.arch-v3-hop::after {
+    content: "";
+    position: absolute;
+    right: -3px;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid #ffcf8a;
+    border-top: 2px solid #ffcf8a;
+    transform: translateY(-50%) rotate(45deg);
+}
+.arch-v3-hop::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 50%;
+    bottom: 8px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    color: #ffcf8a;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+}
+
+/* both gate exits rejoin the main line */
+.arch-v3-rejoin {
+    position: relative;
+    width: min(420px, 100%);
+    height: 26px;
+    border-left: 2px dashed rgba(190,196,255,0.34);
+    border-right: 2px dashed rgba(190,196,255,0.34);
+    border-bottom: 2px dashed rgba(190,196,255,0.34);
+    border-bottom-left-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+.arch-v3-rejoin::after {
+    content: attr(data-label);
+    position: absolute;
+    left: 50%;
+    bottom: -7px;
+    transform: translateX(-50%);
+    padding: 0 8px;
+    background: #0d1226;
+    color: #9aa0c9;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
+
+/* the critique -> gate2 -> revise cycle */
+.arch-v3-cycle {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 14px 14px 12px;
+    border: 1px solid rgba(255,122,122,0.30);
+    border-radius: 10px;
+    background: rgba(255,122,122,0.035);
+}
+.arch-v3-cycle > .arch-node { width: min(520px, 100%); }
+.arch-v3-loop {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    width: 100%;
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 2px dashed rgba(255,122,122,0.5);
+    text-align: center;
+}
+.arch-v3-loop::before {
+    content: "↺";
+    position: absolute;
+    top: -11px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0 8px;
+    background: #0d1226;
+    color: #ff9d9d;
+    font-size: 14px;
+    line-height: 1;
+    animation: arch-flow-pulse 2.1s ease-in-out infinite;
+}
+.arch-v3-loop-label {
+    color: #ff9d9d;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+}
+.arch-v3-loop em {
+    color: #9aa0c9;
+    font-size: 11px;
+    font-style: normal;
+}
+
+@media (max-width: 900px) {
+    .arch-v3-entry-row,
+    .arch-v3-terminal-row,
+    .arch-v3-state-grid { grid-template-columns: 1fr; }
+    .arch-v3-gate-pair { grid-template-columns: 1fr; }
+    .arch-v3-hop { min-width: 0; width: 2px; height: 26px; justify-self: center; }
+    .arch-v3-hop::before { left: auto; right: 8px; bottom: 50%; transform: translateY(50%); }
+    .arch-v3-hop::after { right: 50%; top: auto; bottom: -3px; transform: translateX(50%) rotate(135deg); }
+}
+
+/* V3 nodes carry longer detail text than V1/V2, and .arch-node lays strong+em
+   out as siblings on one flex line under overflow:hidden — which silently
+   clipped them. Scoped to V3 so the shorter V1/V2 labels keep their single-line
+   look: the badge stays left, the title sits beside it, the detail wraps onto
+   its own full-width line aligned to the title. */
+.arch-v3-page .arch-node {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0 12px;
+}
+.arch-v3-page .arch-node span { align-self: flex-start; }
+.arch-v3-page .arch-node strong { flex: 1 1 calc(100% - 46px); min-width: 0; }
+.arch-v3-page .arch-node em {
+    flex: 1 1 100%;
+    min-width: 0;
+    margin-left: 46px;
+    overflow-wrap: anywhere;
+}
+
+/* Model Pricing Compare.
+   Horizontal bars: the job is comparing magnitude across named entities. Colour
+   comes from ui_theme.model_color() so a model keeps its hue across the whole
+   app — colour follows the entity, never the rank, so re-sorting cannot repaint
+   anything. That palette validates clean for CVD separation, but in light mode
+   two hues fall under 3:1 against the surface, which is why every bar carries a
+   value label in text ink rather than relying on the fill to be read. */
+.price-flow {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: min(880px, 100%);
+    margin: 0 auto;
+}
+.price-callout,
+.price-block {
+    opacity: 0;
+    animation: arch-node-in 0.45s ease forwards;
+    animation-delay: calc(var(--step) * 0.16s);
+}
+.price-callout {
+    padding: 14px 16px;
+    border: 1px solid rgba(255,179,71,0.42);
+    border-left: 4px solid #ffb347;
+    border-radius: 8px;
+    background: rgba(255,179,71,0.07);
+}
+.price-callout strong {
+    display: block;
+    margin-bottom: 5px;
+    color: #ffcf8a;
+    font-size: 13px;
+    font-weight: 700;
+}
+.price-callout p {
+    margin: 0;
+    color: #cdd2ef;
+    font-size: 12px;
+    line-height: 1.65;
+}
+.price-block {
+    padding: 16px 18px 18px;
+    border: 1px solid #2a3157;
+    border-radius: 10px;
+    background: #111832;
+}
+.price-block-head h3 {
+    margin: 0 0 3px;
+    color: #f2f4ff;
+    font-size: 13px;
+    font-weight: 700;
+}
+.price-block-head p {
+    margin: 0 0 12px;
+    color: #9aa0c9;
+    font-size: 11.5px;
+    line-height: 1.6;
+}
+.price-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    margin-bottom: 12px;
+    color: #cdd2ef;
+    font-size: 11.5px;
+    font-weight: 650;
+}
+.price-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.price-legend i { width: 11px; height: 11px; border-radius: 3px; }
+/* 2px surface gap between adjacent fills, so bars never touch */
+.price-chart { display: flex; flex-direction: column; gap: 6px; }
+.price-row {
+    display: grid;
+    grid-template-columns: minmax(0, 175px) minmax(0, 1fr) minmax(58px, auto);
+    align-items: center;
+    gap: 12px;
+}
+.price-row-label {
+    min-width: 0;
+    color: #e8ebff;
+    font-size: 11.5px;
+    font-weight: 650;
+    line-height: 1.3;
+}
+.price-row-label em {
+    display: block;
+    color: #9aa0c9;
+    font-size: 10.5px;
+    font-style: normal;
+    font-weight: 500;
+}
+.price-track {
+    position: relative;
+    height: 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.05);
+    overflow: hidden;
+}
+.price-track i {
+    display: block;
+    height: 100%;
+    /* rounded data-end only, anchored flat to the baseline */
+    border-radius: 0 4px 4px 0;
+    transform-origin: left center;
+    animation: price-bar-grow 0.7s cubic-bezier(.22,.9,.3,1) both;
+    animation-delay: calc(var(--step) * 0.16s + 0.2s);
+}
+@keyframes price-bar-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.price-track.empty {
+    background: repeating-linear-gradient(
+        135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px);
+    border: 1px dashed rgba(190,196,255,0.30);
+}
+.price-value {
+    color: #f2f4ff;
+    font-size: 12px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+.price-value.none {
+    color: #9aa0c9;
+    font-size: 10.5px;
+    font-weight: 600;
+}
+.price-row.unpriced .price-row-label { color: #9aa0c9; }
+.price-table {
+    width: 100%;
+    margin-top: 14px;
+    border-collapse: collapse;
+    font-size: 11.5px;
+}
+.price-table.narrow { margin-top: 0; }
+.price-table th {
+    padding: 6px 10px;
+    border-bottom: 1px solid #2a3157;
+    color: #8888cc;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    text-align: left;
+}
+.price-table th:not(:first-child),
+.price-table td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.price-table td {
+    padding: 7px 10px;
+    border-bottom: 1px solid rgba(42,49,87,0.55);
+    color: #cdd2ef;
+}
+.price-table td.m { display: flex; align-items: center; gap: 8px; color: #e8ebff; font-weight: 600; }
+.price-table td.m i { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.price-table td.m i.none { border: 1px dashed rgba(190,196,255,0.45); background: transparent; }
+.price-table tr.unpriced td { color: #9aa0c9; }
+.price-gaps, .price-sources { margin: 0; padding-left: 18px; }
+.price-gaps li, .price-sources li {
+    margin-bottom: 7px;
+    color: #cdd2ef;
+    font-size: 12px;
+    line-height: 1.6;
+}
+.price-gaps strong { color: #f2f4ff; }
+.price-sources a { color: #7ef6e0; text-decoration: none; }
+.price-sources a:hover { text-decoration: underline; }
+@media (max-width: 760px) {
+    .price-row { grid-template-columns: 1fr; gap: 4px; }
+    .price-value { text-align: left; }
+}
+.price-legend i.none {
+    border: 1px dashed rgba(190,196,255,0.55);
+    background: transparent;
+}
+
+/* Plane chips. Every price on this page belongs to exactly one commercial
+   plane, and mixing them is the failure mode the page exists to avoid — so the
+   plane is stated on the row itself, not just in a header the reader scrolled
+   past. Neutral-toned on purpose: the model hue already carries identity, and a
+   second saturated colour here would compete with it. */
+.price-planes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 11px 14px;
+    border: 1px solid #2a3157;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.02);
+    color: #9aa0c9;
+    font-size: 11.5px;
+    line-height: 1.6;
+    opacity: 0;
+    animation: arch-node-in 0.45s ease forwards;
+    animation-delay: calc(var(--step) * 0.16s);
+}
+.price-planes span { display: flex; align-items: baseline; gap: 8px; }
+b.plane {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border: 1px solid #3a3f68;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    color: #cdd2ef;
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+b.plane.azure { border-color: rgba(120,160,255,0.55); color: #a9c2ff; }
+b.plane.vertex { border-color: rgba(126,246,224,0.5); color: #7ef6e0; }
+.price-row-label b.plane { margin-right: 7px; }
+.price-legend b.plane { margin-left: 6px; }
+.price-table td.m b.plane { margin-left: 8px; }
+b.derived {
+    margin-left: 6px;
+    padding: 0 5px;
+    border: 1px dashed rgba(190,196,255,0.42);
+    border-radius: 3px;
+    color: #9aa0c9;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
 }

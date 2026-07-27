@@ -7,9 +7,10 @@ from html import escape as esc
 import plotly.graph_objects as go
 import streamlit as st
 
+from config import model_label
 from i18n import t
 from pipeline import PipelineResult
-from ui_theme import plotly_theme
+from ui_theme import model_color, plotly_theme
 
 CATEGORY_KEYWORDS = {
     "people": ["person", "people", "portrait", "man", "woman", "girl", "boy", "character", "model", "人物", "人像", "男人", "女人", "角色"],
@@ -39,20 +40,46 @@ def _category_label(category: str) -> str:
     return t(f"category_{category}")
 
 
-def _winner_label(winner: str) -> str:
-    if winner == "model_a":
-        return t("history_winner_a")
-    if winner == "model_b":
-        return t("history_winner_b")
-    return t("draw_label")
+def run_model_slots(run: PipelineResult) -> tuple[tuple[str, str], tuple[str, str]]:
+    """((key_a, label_a), (key_b, label_b)) for a run.
+
+    Slot A is not a fixed model — the same model appears in either slot across
+    runs, so anything aggregated per model must go through this rather than
+    counting "model_a" wins.
+    """
+    comp = run.comparison
+    fallback_a = (comp.model_a_name if comp else "") or run.model_a_label
+    fallback_b = (comp.model_b_name if comp else "") or run.model_b_label
+    return (
+        (run.model_a_key, model_label(run.model_a_key, fallback_a)),
+        (run.model_b_key, model_label(run.model_b_key, fallback_b)),
+    )
 
 
-def _dashboard_winner_badge(winner: str) -> str:
-    if winner == "model_a":
-        return f'<span class="dashboard-winner-pill gpt">● {esc(t("history_winner_a"))}</span>'
-    if winner == "model_b":
-        return f'<span class="dashboard-winner-pill gemini">● {esc(t("history_winner_b"))}</span>'
-    return f'<span class="dashboard-winner-pill draw">{esc(t("draw_label"))}</span>'
+def winning_model(run: PipelineResult) -> tuple[str, str] | None:
+    """(key, label) of the model that actually won, or None for a draw."""
+    comp = run.comparison
+    if not comp:
+        return None
+    slot_a, slot_b = run_model_slots(run)
+    if comp.overall_winner == "model_a":
+        return slot_a
+    if comp.overall_winner == "model_b":
+        return slot_b
+    return None
+
+
+def winner_pill(run: PipelineResult) -> str:
+    """Winner badge naming the actual model, colored by model identity."""
+    winner = winning_model(run)
+    if winner is None:
+        return f'<span class="dashboard-winner-pill draw">{esc(t("draw_label"))}</span>'
+    key, label = winner
+    return (
+        f'<span class="dashboard-winner-pill" title="{esc(label)}" '
+        f'style="--pill-color:{esc(model_color(key))}">'
+        f'● {esc(label)}</span>'
+    )
 
 
 def _dashboard_sort_button(column_key: str, label: str, *, default_ascending: bool) -> None:
@@ -75,20 +102,25 @@ def _render_dashboard_recent_runs(
     parse_run_datetime: ParseRunDatetime,
     history_date_label: HistoryDateLabel,
 ) -> None:
-    dashboard_columns = [1.15, 1.65, 6.85, 1.0, 0.9, 1.2]
+    # The winner column holds a full model name now, not a 3-letter abbreviation,
+    # so it needs real width — taken from the prompt column, which wraps freely.
+    dashboard_columns = [1.1, 1.4, 4.3, 3.0, 1.0, 1.3]
     rows = []
     for run in runs:
         comp = run.comparison
         parsed_date = parse_run_datetime(run.timestamp) or datetime.min
         category = _category_label(_prompt_category(run.prompt))
+        (_key_a, label_a), (_key_b, label_b) = run_model_slots(run)
         rows.append({
             "date_dt": parsed_date,
             "date": history_date_label(run.timestamp),
             "category": category,
             "prompt": run.prompt,
-            "winner": comp.overall_winner,
+            "winner_html": winner_pill(run),
             "margin": comp.margin or "—",
             "score": f"{comp.model_a_mean:.2f} / {comp.model_b_mean:.2f}",
+            # Slot order varies per run, so name the models behind the numbers.
+            "score_title": f"{label_a} {comp.model_a_mean:.2f} · {label_b} {comp.model_b_mean:.2f}",
         })
 
     sort_by = st.session_state.setdefault("dashboard_sort_by", "date")
@@ -121,11 +153,14 @@ def _render_dashboard_recent_runs(
         with cols[2]:
             st.markdown(f'<div class="dashboard-cell prompt">{esc(row["prompt"])}</div>', unsafe_allow_html=True)
         with cols[3]:
-            st.markdown(f'<div class="dashboard-cell">{_dashboard_winner_badge(row["winner"])}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="dashboard-cell">{row["winner_html"]}</div>', unsafe_allow_html=True)
         with cols[4]:
             st.markdown(f'<div class="dashboard-cell stable">{esc(str(row["margin"]))}</div>', unsafe_allow_html=True)
         with cols[5]:
-            st.markdown(f'<div class="dashboard-cell stable score">{esc(row["score"])}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="dashboard-cell stable score" title="{esc(row["score_title"])}">{esc(row["score"])}</div>',
+                unsafe_allow_html=True,
+            )
         st.markdown('<div class="dashboard-row-separator"></div>', unsafe_allow_html=True)
 
 
@@ -137,6 +172,71 @@ def _dashboard_metric(label: str, value: str, subtext: str = "") -> str:
         f'<em>{esc(subtext)}</em>'
         f'</div>'
     )
+
+
+def _model_standings(runs: list[PipelineResult]) -> tuple[list[dict], int]:
+    """Per-model totals across every run, plus the draw count.
+
+    Keyed on the model key rather than the slot: the same model appears in both
+    slots across history, so slot-based totals conflate different models.
+    """
+    standings: dict[str, dict] = {}
+    draws = 0
+
+    def _bucket(key: str, label: str) -> dict:
+        return standings.setdefault(key, {"key": key, "label": label, "runs": 0, "wins": 0, "score_total": 0.0})
+
+    for run in runs:
+        comp = run.comparison
+        (key_a, label_a), (key_b, label_b) = run_model_slots(run)
+        bucket_a, bucket_b = _bucket(key_a, label_a), _bucket(key_b, label_b)
+        bucket_a["runs"] += 1
+        bucket_a["score_total"] += comp.model_a_mean
+        bucket_b["runs"] += 1
+        bucket_b["score_total"] += comp.model_b_mean
+        winner = winning_model(run)
+        if winner is None:
+            draws += 1
+        else:
+            _bucket(*winner)["wins"] += 1
+
+    rows = []
+    for entry in standings.values():
+        runs_count = entry["runs"] or 1
+        rows.append({
+            **entry,
+            "win_rate": entry["wins"] / runs_count,
+            "avg_score": entry["score_total"] / runs_count,
+        })
+    rows.sort(key=lambda row: (row["wins"], row["win_rate"], row["avg_score"]), reverse=True)
+    return rows, draws
+
+
+def _render_model_leaderboard(rows: list[dict]) -> None:
+    """Per-model standings. Also the table view that gives the donut's
+    low-contrast palette slots their required relief."""
+    columns = [3.4, 1.0, 1.0, 1.2, 1.2]
+    st.markdown(f'<div class="dashboard-table-title">{esc(t("dashboard_leaderboard"))}</div>', unsafe_allow_html=True)
+    header = st.columns(columns, gap="small")
+    for col, key in zip(header, ("dashboard_model", "dashboard_runs", "dashboard_wins", "dashboard_win_rate", "dashboard_avg_score")):
+        with col:
+            st.markdown(f'<div class="dashboard-header-cell">{esc(t(key))}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-row-separator"></div>', unsafe_allow_html=True)
+
+    for row in rows:
+        cols = st.columns(columns, gap="small")
+        with cols[0]:
+            st.markdown(
+                f'<div class="dashboard-cell"><span class="dashboard-model-swatch" '
+                f'style="--pill-color:{esc(model_color(row["key"]))}"></span>{esc(row["label"])}</div>',
+                unsafe_allow_html=True,
+            )
+        for col, value in zip(cols[1:], (
+            str(row["runs"]), str(row["wins"]), f'{row["win_rate"] * 100:.0f}%', f'{row["avg_score"]:.2f}',
+        )):
+            with col:
+                st.markdown(f'<div class="dashboard-cell stable">{esc(value)}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="dashboard-row-separator"></div>', unsafe_allow_html=True)
 
 
 def render_dashboard_page(
@@ -160,27 +260,20 @@ def render_dashboard_page(
         st.markdown(f'<div class="empty-state">{esc(t("dashboard_no_data"))}</div>', unsafe_allow_html=True)
         return
 
-    winner_counts = {"model_a": 0, "model_b": 0, "draw": 0}
+    standings, draws = _model_standings(runs)
     category_counts: dict[str, int] = {}
-    total_a = 0.0
-    total_b = 0.0
     for run in runs:
-        comp = run.comparison
-        winner_counts[comp.overall_winner] = winner_counts.get(comp.overall_winner, 0) + 1
-        total_a += comp.model_a_mean
-        total_b += comp.model_b_mean
         category = _prompt_category(run.prompt)
         category_counts[category] = category_counts.get(category, 0) + 1
 
     metric_html = "".join([
         _dashboard_metric(t("dashboard_total_runs"), str(len(runs))),
-        _dashboard_metric(t("dashboard_gpt_wins"), str(winner_counts.get("model_a", 0))),
-        _dashboard_metric(t("dashboard_gemini_wins"), str(winner_counts.get("model_b", 0))),
-        _dashboard_metric(t("dashboard_draws"), str(winner_counts.get("draw", 0))),
-        _dashboard_metric(t("dashboard_avg_score_a"), f"{total_a / len(runs):.2f}"),
-        _dashboard_metric(t("dashboard_avg_score_b"), f"{total_b / len(runs):.2f}"),
+        _dashboard_metric(t("dashboard_models_compared"), str(len(standings))),
+        _dashboard_metric(t("dashboard_draws"), str(draws)),
     ])
     st.markdown(f'<div class="dashboard-metric-grid">{metric_html}</div>', unsafe_allow_html=True)
+
+    _render_model_leaderboard(standings)
 
     col1, col2 = st.columns(2)
     chart_theme = plotly_theme()
@@ -201,16 +294,32 @@ def render_dashboard_page(
         st.plotly_chart(fig, use_container_width=True, key="dashboard_categories")
 
     with col2:
-        winner_labels = [_winner_label("model_a"), _winner_label("model_b"), _winner_label("draw")]
-        winner_values = [winner_counts.get("model_a", 0), winner_counts.get("model_b", 0), winner_counts.get("draw", 0)]
-        fig = go.Figure(go.Pie(labels=winner_labels, values=winner_values, hole=0.48, marker_colors=["#4F46E5", "#D97706", "#A1A1AA"]))
+        winner_rows = [row for row in standings if row["wins"] > 0]
+        labels = [row["label"] for row in winner_rows]
+        values = [row["wins"] for row in winner_rows]
+        colors = [model_color(row["key"]) for row in winner_rows]
+        if draws:
+            labels.append(t("draw_label"))
+            values.append(draws)
+            colors.append(model_color(None))
+        fig = go.Figure(go.Pie(
+            labels=labels, values=values, hole=0.48,
+            marker=dict(colors=colors, line=dict(color=chart_theme["paper"], width=2)),
+            # Direct labels + the 2px surface gap above are the secondary encoding
+            # the palette's dark-mode CVD separation requires.
+            textinfo="label+value",
+            textposition="outside",
+            sort=False,
+        ))
         fig.update_layout(
             title=t("dashboard_winner_distribution"),
             paper_bgcolor=chart_theme["paper"],
             plot_bgcolor=chart_theme["plot"],
             font=dict(color=chart_theme["font"]),
-            margin=dict(t=50, b=40, l=20, r=20),
+            # Outside labels need horizontal room or long model names clip.
+            margin=dict(t=50, b=40, l=90, r=90),
             height=330,
+            showlegend=True,
         )
         st.plotly_chart(fig, use_container_width=True, key="dashboard_winners")
 

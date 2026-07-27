@@ -2,7 +2,7 @@
 
 Languages: [English](README.md) | [简体中文](README.zh-CN.md)
 
-Current version: `0.8` (last updated 2026-05-08). See [CHANGELOG.md](CHANGELOG.md) for release history.
+Current version: `1.0` (last updated 2026-07-27). See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 Multi-Agent Image Generation Evals Pipeline is a multi-agent system for evaluating and comparing AI image generation models. The app sends one prompt to two image-generation agents, uses a dedicated evaluation agent to score both outputs with a rubric, runs independent critique and revision agents to challenge the scores, optionally pauses for human-in-the-loop (HIL) review when risk is high, and archives every run for later inspection.
 
@@ -34,7 +34,13 @@ See the full screenshot gallery in [SNAPSHOTS.md](SNAPSHOTS.md).
 | Critique round 1 | GPT-5.4 | OpenAI |
 | Critique round 2 | Gemini 3.1 Pro | Google |
 
-Model names and runtime settings live in [config.py](config.py).
+Newer models are supported and selectable per role without code changes. **Claude Opus 5**
+(`EVAL_MODEL=claude-opus-5`) and **GPT-5.6 Sol** (`CRITIQUE_MODEL=gpt-5.6-sol`) have both been
+exercised in a full live run. Image generators are chosen per run in the UI from
+`IMAGE_GEN_MODELS` (GPT Image-2, Gemini 3 Pro, MAI-Image 2, MAI-Image 2.5, GPT Image 1.5).
+
+Model names and runtime settings live in [config.py](config.py). See the **Model Pricing Compare**
+page in the app for published per-token and per-image costs, kept on a single commercial plane.
 
 ## Pipeline
 
@@ -67,14 +73,26 @@ Prompt
          Deterministic comparison
 ```
 
-The orchestrator is [pipeline.py](pipeline.py). Provider adapters are split across [generate.py](generate.py), [evaluate.py](evaluate.py), [critique.py](critique.py), and [revise.py](revise.py). Rubrics and prompt contracts are centralized in [prompts.py](prompts.py), and all output contracts are defined in [schemas.py](schemas.py).
+Two orchestrators are available behind `USE_GRAPH_ORCHESTRATOR` (default off), selected in
+[orchestrator.py](orchestrator.py) and writing identical run artifacts:
+
+- **[pipeline.py](pipeline.py)** — the default. Straight-line Python orchestration.
+- **[graph_pipeline.py](graph_pipeline.py)** — a LangGraph `StateGraph` (11 nodes, 6 conditional
+  edges, 1 cycle). Adds checkpointed crash recovery through `SqliteSaver`, and turns each HIL gate
+  into a compute node plus an `interrupt()` wait node, so resuming a paused run replays only the
+  wait and never re-scores the gate. See the **Architecture V3** page in the app.
+
+Turning the flag on requires the project virtualenv (`uv run streamlit run app.py`); LangGraph is
+imported lazily so the default path does not need it installed.
+
+Provider adapters are split across [generate.py](generate.py), [evaluate.py](evaluate.py), [critique.py](critique.py), and [revise.py](revise.py). Rubrics and prompt contracts are centralized in [prompts.py](prompts.py), and all output contracts are defined in [schemas.py](schemas.py).
 
 ### Core Stages
 
 1. **Generation**: GPT Image-2 and Gemini 3 Pro run in parallel with retry and timeout handling.
 2. **Evaluation**: Claude scores both images across six rubric dimensions and records evidence/confidence fields.
 3. **Gate 1**: A deterministic uncertainty/risk router checks margin risk, difficulty, evidence quality, confidence, and cross-dimension conflicts.
-4. **Critique round 1**: GPT-5.4 independently critiques the initial evaluation.
+4. **Critique round 1**: the configured OpenAI critic (GPT-5.4 by default, GPT-5.6 Sol verified) independently critiques the initial evaluation.
 5. **Revision round 1**: Claude revises the evaluation with critique context.
 6. **Critique round 2**: Gemini independently critiques the revised evaluation. Raw Gemini output is archived to aid debugging malformed or truncated JSON.
 7. **Gate 2**: A deterministic disagreement detector compares critique signals and score movement.
@@ -245,7 +263,10 @@ prompt_inputs_08_final_revision.json
 ```text
 multi-agent-image-gen-evals/
 |-- app.py                 # Streamlit dashboard and run-management UI
-|-- pipeline.py            # Pipeline orchestration, persistence, resume/fallback logic
+|-- orchestrator.py        # Orchestrator selection seam (USE_GRAPH_ORCHESTRATOR)
+|-- pipeline.py            # Default orchestration, persistence, resume/fallback logic
+|-- graph_pipeline.py      # LangGraph StateGraph orchestrator with SQLite checkpointing
+|-- errors.py              # CheckpointMissing, catchable without importing LangGraph
 |-- generate.py            # Parallel GPT Image-2 and Gemini 3 Pro generation
 |-- evaluate.py            # Claude initial scoring
 |-- critique.py            # GPT round 1 and Gemini round 2 critique adapters
@@ -256,10 +277,13 @@ multi-agent-image-gen-evals/
 |-- prompts.py             # Rubric and prompt contracts
 |-- utils.py               # Retry, image encoding, JSON parsing/repair helpers
 |-- i18n.py                # English/Chinese UI text helpers
+|-- ui_architecture.py     # Architecture V1/V2/V3 pages
+|-- ui_pricing.py          # Model Pricing Compare page
+|-- pricing_data.py        # Published prices with sources, one commercial plane per row
 |-- config.py              # Model names, timeouts, retries, HIL defaults
 |-- static/style.css       # Streamlit UI styling
 |-- tests/                 # Pytest suite
-|-- docs/superpowers/      # Design notes and Architecture V2 docs
+|-- docs/superpowers/      # Design notes and architecture docs
 |-- runs/                  # Local generated runs, ignored by git
 |-- pyproject.toml
 |-- .env.example

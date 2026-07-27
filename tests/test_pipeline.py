@@ -125,7 +125,7 @@ class TestImageGenerationFailure:
         assert result.pipeline_status == "failed"
         assert result.requires_attention is True
         assert result.comparison is None
-        assert any("GPT Image-2 failed" in error for error in result.errors)
+        assert any("GPT Image 2 failed" in error for error in result.errors)
         summary = json.loads((result.run_dir / "summary.json").read_text())
         assert summary["pipeline_status"] == "failed"
         assert summary["has_comparison"] is False
@@ -143,16 +143,16 @@ class TestImageGenerationFailure:
 
         result = run_pipeline("test prompt", runs_dir=tmp_path)
 
-        assert result.errors == ["GPT Image-2 failed: TimeoutError"]
+        assert result.errors == ["GPT Image 2 failed: TimeoutError"]
         summary = json.loads((result.run_dir / "summary.json").read_text())
-        assert summary["errors"] == ["GPT Image-2 failed: TimeoutError"]
+        assert summary["errors"] == ["GPT Image 2 failed: TimeoutError"]
 
     def test_reference_image_is_persisted_for_generation(self, tmp_path, monkeypatch):
         image_buffer = BytesIO()
         Image.new("RGB", (2000, 1000), color="red").save(image_buffer, format="JPEG")
         seen = {}
 
-        def fake_generate_images(prompt, run_dir, on_model_done=None, reference_image_path=None):
+        def fake_generate_images(prompt, run_dir, on_model_done=None, reference_image_path=None, model_a=None, model_b=None):
             seen["reference_image_path"] = reference_image_path
             return {
                 "gpt_image_2": RuntimeError("stop before eval"),
@@ -223,7 +223,7 @@ class TestResumePipeline:
         image_done = []
         calls = {"generate": 0, "eval": 0, "gate1": 0, "critique": 0, "revise": 0}
 
-        def fake_generate_images(prompt, run_dir_arg, on_model_done=None, reference_image_path=None):
+        def fake_generate_images(prompt, run_dir_arg, on_model_done=None, reference_image_path=None, model_a=None, model_b=None):
             calls["generate"] += 1
             assert prompt == "test prompt"
             assert run_dir_arg == run_dir

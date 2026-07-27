@@ -53,7 +53,9 @@ class DimensionScore(BaseModel):
 class ImageEvaluation(BaseModel):
     """Evaluation of a single image across all 6 dimensions."""
 
-    model_name: str
+    # Optional: display names come from the selected models (see compare.determine_winner),
+    # so a missing model_name in the evaluator's JSON should not fail the run.
+    model_name: str = ""
     prompt_adherence: DimensionScore
     photorealism: DimensionScore
     aesthetic_quality: DimensionScore
@@ -79,7 +81,7 @@ class DimensionCritique(BaseModel):
 
 
 class CritiqueResponse(BaseModel):
-    """A reviewer's critique of an evaluation (GPT-5.4 round 1, Gemini 3.1 Pro round 2)."""
+    """A reviewer's critique of an evaluation (OpenAI critic round 1, Gemini critic round 2)."""
 
     overall_assessment: str
     dimension_critiques: list[DimensionCritique]
@@ -99,9 +101,9 @@ class RevisedDimensionScore(BaseModel):
 
 
 class RevisedImageEvaluation(BaseModel):
-    """Revised evaluation after considering GPT-5.4's critique."""
+    """Revised evaluation after considering the round-1 critic's feedback."""
 
-    model_name: str
+    model_name: str = ""
     prompt_adherence: RevisedDimensionScore
     photorealism: RevisedDimensionScore
     aesthetic_quality: RevisedDimensionScore
@@ -131,6 +133,12 @@ class DimensionResult(BaseModel):
     pre_critique_score_a: int
     pre_critique_score_b: int
     winner: WinnerType
+    # Set when a human arbitrated this dimension at gate 1. `winner` then reflects
+    # their call rather than the scores, which are left exactly as the evaluator
+    # produced them — so a dimension can legitimately show the lower score winning.
+    # Defaults keep older comparison.json files loadable unchanged.
+    human_decided: bool = False
+    model_winner: WinnerType | None = None  # what the scores alone would have said
 
 
 class ComparisonResult(BaseModel):

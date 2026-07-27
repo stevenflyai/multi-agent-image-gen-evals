@@ -2,6 +2,8 @@
 
 语言版本：[English](README.md) | [简体中文](README.zh-CN.md)
 
+当前版本：`1.0`（最后更新 2026-07-27）。发布历史见 [CHANGELOG.md](CHANGELOG.md)。
+
 Multi-Agent Image Generation Evals Pipeline 是一个用于评估和比较 AI 图像生成模型的 multi-agent system。应用会把同一个 prompt 同时发送给两个图像生成 agent，再由独立 evaluation agent 按统一 rubric 评估两张输出图，并通过 critique agent 与 revision agent 多轮挑战和修正评分；当风险较高时，可暂停进入 human-in-the-loop (HIL) 人工裁决，并把每次运行的完整过程归档，便于后续复盘。
 
 主入口是一个用于操作 multi-agent workflow 的中英双语 Streamlit Dashboard，支持并排看图、进度和 Activity Log、分数可视化、critique transcript、HIL 审核控件、历史 run 加载、删除和重跑。
@@ -32,7 +34,13 @@ Multi-Agent Image Generation Evals Pipeline 是一个用于评估和比较 AI �
 | Critique round 1 | GPT-5.4 | OpenAI |
 | Critique round 2 | Gemini 3.1 Pro | Google |
 
-模型名称和运行参数集中配置在 [config.py](config.py)。
+更新的模型无需改代码即可按角色切换。**Claude Opus 5**（`EVAL_MODEL=claude-opus-5`）和
+**GPT-5.6 Sol**（`CRITIQUE_MODEL=gpt-5.6-sol`）都已在完整真机跑动中验证过。图像生成模型在 UI 里
+按 run 选择，可选项来自 `IMAGE_GEN_MODELS`（GPT Image-2、Gemini 3 Pro、MAI-Image 2、
+MAI-Image 2.5、GPT Image 1.5）。
+
+模型名称和运行参数集中配置在 [config.py](config.py)。各模型公布的 token 费率与每张成本见应用内的
+**Model Pricing Compare** 页面，所有数字统一在同一个商业平面上。
 
 ## Pipeline
 
@@ -65,14 +73,26 @@ Prompt
          Deterministic comparison
 ```
 
-Pipeline 编排逻辑在 [pipeline.py](pipeline.py)。各 provider/model adapter 分布在 [generate.py](generate.py)、[evaluate.py](evaluate.py)、[critique.py](critique.py) 和 [revise.py](revise.py)。Rubric 和 prompt contract 集中在 [prompts.py](prompts.py)，所有输出结构由 [schemas.py](schemas.py) 的 Pydantic schema 定义。
+编排器有两套，由 `USE_GRAPH_ORCHESTRATOR`（默认关）在 [orchestrator.py](orchestrator.py) 中选择，
+两者写出的 run 产物完全一致：
+
+- **[pipeline.py](pipeline.py)** —— 默认路径，直线式 Python 编排。
+- **[graph_pipeline.py](graph_pipeline.py)** —— LangGraph `StateGraph`（11 个节点、6 条条件边、
+  1 个环）。通过 `SqliteSaver` 提供带检查点的崩溃恢复；每道 HIL 闸门拆成「计算节点 + 只含
+  `interrupt()` 的等待节点」，恢复时只重放等待节点，闸门打分永远不会重算。详见应用内的
+  **Architecture V3** 页面。
+
+打开这个 flag 需要使用项目虚拟环境（`uv run streamlit run app.py`）；LangGraph 是惰性 import 的，
+默认路径不需要安装它。
+
+各 provider/model adapter 分布在 [generate.py](generate.py)、[evaluate.py](evaluate.py)、[critique.py](critique.py) 和 [revise.py](revise.py)。Rubric 和 prompt contract 集中在 [prompts.py](prompts.py)，所有输出结构由 [schemas.py](schemas.py) 的 Pydantic schema 定义。
 
 ### 核心阶段
 
 1. **Generation**：GPT Image-2 和 Gemini 3 Pro 并行生成图片，带 retry 和 timeout 处理。
 2. **Evaluation**：Claude 按 6 个 rubric 维度评估两张图，并记录 evidence/confidence 字段。
 3. **Gate 1**：确定性的 uncertainty/risk router，检查 margin risk、prompt difficulty、evidence quality、confidence 和跨维度冲突。
-4. **Critique round 1**：GPT-5.4 独立审查初始 evaluation。
+4. **Critique round 1**：配置的 OpenAI 评审模型（默认 GPT-5.4，已验证 GPT-5.6 Sol）独立审查初始 evaluation。
 5. **Revision round 1**：Claude 基于 critique context 修订 evaluation。
 6. **Critique round 2**：Gemini 独立审查 revised evaluation。原始 Gemini 输出会被归档，便于排查 malformed 或 truncated JSON。
 7. **Gate 2**：确定性的 disagreement detector，对比 critique signal 和 score movement。
@@ -243,7 +263,10 @@ prompt_inputs_08_final_revision.json
 ```text
 multi-agent-image-gen-evals/
 |-- app.py                 # Streamlit dashboard 和 run 管理 UI
-|-- pipeline.py            # Pipeline 编排、持久化、resume/fallback 逻辑
+|-- orchestrator.py        # 编排器选择接缝（USE_GRAPH_ORCHESTRATOR）
+|-- pipeline.py            # 默认编排、持久化、resume/fallback 逻辑
+|-- graph_pipeline.py      # LangGraph StateGraph 编排器，带 SQLite 检查点
+|-- errors.py              # CheckpointMissing，无需 import LangGraph 即可捕获
 |-- generate.py            # 并行 GPT Image-2 和 Gemini 3 Pro 图像生成
 |-- evaluate.py            # Claude 初始评分
 |-- critique.py            # GPT round 1 和 Gemini round 2 critique adapter
@@ -254,10 +277,13 @@ multi-agent-image-gen-evals/
 |-- prompts.py             # Rubric 和 prompt contracts
 |-- utils.py               # Retry、图像编码、JSON parsing/repair helpers
 |-- i18n.py                # 英文/中文 UI 文案 helpers
+|-- ui_architecture.py     # Architecture V1/V2/V3 页面
+|-- ui_pricing.py          # Model Pricing Compare 页面
+|-- pricing_data.py        # 公开价格与来源，每行标注所属商业平面
 |-- config.py              # 模型名、timeout、retry、HIL 默认配置
 |-- static/style.css       # Streamlit UI 样式
 |-- tests/                 # Pytest suite
-|-- docs/superpowers/      # 设计说明和 Architecture V2 docs
+|-- docs/superpowers/      # 设计说明和架构文档
 |-- runs/                  # 本地生成 runs，git ignored
 |-- pyproject.toml
 |-- .env.example

@@ -171,13 +171,11 @@
     background: #27272A !important;
     border-color: var(--border-strong) !important;
 }
-.dashboard-winner-pill.gpt,
 .dim-winner-badge.winner-a {
     color: var(--model-a) !important;
     background: var(--model-a-soft) !important;
     border-color: rgba(129,140,248,0.34) !important;
 }
-.dashboard-winner-pill.gemini,
 .dim-winner-badge.winner-b {
     color: var(--model-b) !important;
     background: var(--model-b-soft) !important;

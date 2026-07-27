@@ -11,9 +11,19 @@ from pathlib import Path
 from typing import Callable
 
 from PIL import Image
+from pydantic import ValidationError
 
-from compare import determine_winner
-from config import CONVERGENCE_THRESHOLD, HIL_ENABLED_BY_DEFAULT, IMAGE_MAX_SIZE, IMAGE_QUALITY, MAX_CRITIQUE_ROUNDS
+from compare import apply_gate2_adjudication, determine_winner
+from config import (
+    CONVERGENCE_THRESHOLD,
+    DEFAULT_MODEL_A,
+    DEFAULT_MODEL_B,
+    HIL_ENABLED_BY_DEFAULT,
+    IMAGE_GEN_MODELS,
+    IMAGE_MAX_SIZE,
+    IMAGE_QUALITY,
+    MAX_CRITIQUE_ROUNDS,
+)
 from critique import critique_evaluation, critique_evaluation_gemini
 from evaluate import evaluate_images
 from gates import evaluate_gate1, evaluate_gate2
@@ -24,6 +34,8 @@ from schemas import (
     ComparisonResult,
     CritiqueResponse,
     GateDecision,
+    HilAdjudication,
+    HilArbitration,
     ImageEvaluation,
     IssueEquivalenceReport,
     PipelineStatus,
@@ -41,6 +53,10 @@ class PipelineResult:
     def __init__(self) -> None:
         self.prompt: str = ""
         self.run_dir: Path | None = None
+        self.model_a_key: str = DEFAULT_MODEL_A
+        self.model_b_key: str = DEFAULT_MODEL_B
+        self.model_a_label: str = _model_label(DEFAULT_MODEL_A)
+        self.model_b_label: str = _model_label(DEFAULT_MODEL_B)
         self.image_paths: dict[str, Path | Exception] = {}
         self.reference_image_path: Path | None = None
         self.reference_image_name: str | None = None
@@ -70,6 +86,57 @@ class PipelineResult:
         return self.revisions[-1] if self.revisions else None
 
 
+def _model_label(model_key: str) -> str:
+    info = IMAGE_GEN_MODELS.get(model_key)
+    return info["label"] if info else model_key
+
+
+def _gate2_adjudication(result: PipelineResult) -> HilAdjudication | None:
+    """The gate 2 human adjudication for this run, if one happened."""
+    payload = result.hil_adjudication
+    if isinstance(payload, HilAdjudication):
+        return payload
+    if isinstance(payload, dict):
+        try:
+            return HilAdjudication(**payload)
+        except ValidationError:
+            return None
+    return None
+
+
+def _final_revision(result: PipelineResult) -> RevisedEvaluation:
+    """The revision the winner is decided from.
+
+    Normally the last round. When a human adjudicated gate 2, dimensions they
+    judged round 1 more convincing on are taken from the round-1 revision
+    instead — see compare.apply_gate2_adjudication. A run with a single round
+    has nothing to select between and is returned as-is.
+    """
+    revisions = result.revisions
+    if len(revisions) < 2:
+        return revisions[-1]
+    return apply_gate2_adjudication(revisions[-2], revisions[-1], _gate2_adjudication(result))
+
+
+def _gate1_arbitration(result: PipelineResult) -> HilArbitration | None:
+    """The gate 1 human review for this run, if one happened.
+
+    `hil_reviews` holds either the model or — when a resume payload failed
+    validation and was passed through — a raw dict. Coerce what can be coerced
+    and ignore the rest: a hand-edited or truncated arbitration must not break
+    winner determination for the whole run.
+    """
+    for review in result.hil_reviews:
+        if isinstance(review, HilArbitration):
+            return review
+        if isinstance(review, dict):
+            try:
+                return HilArbitration(**review)
+            except ValidationError:
+                continue
+    return None
+
+
 def _scores_converged(prev: RevisedEvaluation, curr: RevisedEvaluation, threshold: int) -> bool:
     """Check if all score deltas between two revisions are below the threshold."""
     for d in DIMENSIONS:
@@ -89,6 +156,8 @@ def run_pipeline(
     on_image_done: Callable[[str], None] | None = None,
     reference_image: bytes | None = None,
     reference_image_name: str | None = None,
+    model_a: str = DEFAULT_MODEL_A,
+    model_b: str = DEFAULT_MODEL_B,
 ) -> PipelineResult:
     """Run the full evaluation pipeline with multi-round critique.
 
@@ -96,11 +165,17 @@ def run_pipeline(
         prompt: The image generation prompt.
         runs_dir: Base directory for run outputs.
         on_stage: Optional callback for stage progress updates.
+        model_a: Key (config.IMAGE_GEN_MODELS) for slot A's generator.
+        model_b: Key (config.IMAGE_GEN_MODELS) for slot B's generator.
     """
     result = PipelineResult()
     result.prompt = prompt
     result.timestamp = datetime.now().isoformat()
     result.reference_image_name = reference_image_name
+    result.model_a_key = model_a
+    result.model_b_key = model_b
+    result.model_a_label = _model_label(model_a)
+    result.model_b_label = _model_label(model_b)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = runs_dir / ts
@@ -130,16 +205,18 @@ def run_pipeline(
         run_dir,
         on_model_done=on_image_done,
         reference_image_path=result.reference_image_path,
+        model_a=model_a,
+        model_b=model_b,
     )
 
     gpt_path = result.image_paths.get("gpt_image_2")
     gemini_path = result.image_paths.get("gemini_3_pro")
 
     if isinstance(gpt_path, Exception):
-        result.errors.append(f"GPT Image-2 failed: {_format_exception(gpt_path)}")
+        result.errors.append(f"{result.model_a_label} failed: {_format_exception(gpt_path)}")
         gpt_path = None
     if isinstance(gemini_path, Exception):
-        result.errors.append(f"Gemini 3 Pro failed: {_format_exception(gemini_path)}")
+        result.errors.append(f"{result.model_b_label} failed: {_format_exception(gemini_path)}")
         gemini_path = None
 
     if not gpt_path or not gemini_path:
@@ -151,7 +228,10 @@ def run_pipeline(
     # Step 2: Evaluate
     notify("stage_evaluating")
     try:
-        result.eval_a, result.eval_b, result.prompt_difficulty = evaluate_images(prompt, gpt_path, gemini_path)
+        result.eval_a, result.eval_b, result.prompt_difficulty = evaluate_images(
+            prompt, gpt_path, gemini_path,
+            model_a_label=result.model_a_label, model_b_label=result.model_b_label,
+        )
         (run_dir / "evaluation.json").write_text(
             json.dumps({"model_a": result.eval_a.model_dump(), "model_b": result.eval_b.model_dump()}, indent=2)
         )
@@ -189,7 +269,8 @@ def run_pipeline(
             notify("stage_critique")
             try:
                 crit = critique_evaluation(
-                    prompt, result.eval_a, result.eval_b, gpt_path, gemini_path
+                    prompt, result.eval_a, result.eval_b, gpt_path, gemini_path,
+                    model_a_label=result.model_a_label, model_b_label=result.model_b_label,
                 )
                 result.critiques.append(crit)
                 (run_dir / f"critique_r{round_num}.json").write_text(
@@ -216,6 +297,7 @@ def run_pipeline(
                     prompt, prev_revised.model_a, prev_revised.model_b,
                     gpt_path, gemini_path,
                     raw_output_path=run_dir / "critique_r2_raw.txt",
+                    model_a_label=result.model_a_label, model_b_label=result.model_b_label,
                 )
                 result.critiques.append(crit)
                 (run_dir / f"critique_r{round_num}.json").write_text(
@@ -264,6 +346,7 @@ def run_pipeline(
             rev = revise_evaluation(
                 prompt, revision_input_a, revision_input_b,
                 result.critiques[-1], gpt_path, gemini_path,
+                model_a_label=result.model_a_label, model_b_label=result.model_b_label,
             )
             result.revisions.append(rev)
             (run_dir / f"revised_r{round_num}.json").write_text(
@@ -307,7 +390,12 @@ def run_pipeline(
 
     # Step 5: Compare (uses final revised scores)
     notify("stage_complete")
-    result.comparison = determine_winner(prompt, result.eval_a, result.eval_b, result.revised)
+    final_revision = _final_revision(result)
+    result.comparison = determine_winner(
+        prompt, result.eval_a, result.eval_b, final_revision,
+        model_a_name=result.model_a_label, model_b_name=result.model_b_label,
+        arbitration=_gate1_arbitration(result),
+    )
     if result.pipeline_status == "partial":
         result.pipeline_status = "completed"
     (run_dir / "comparison.json").write_text(json.dumps(result.comparison.model_dump(), indent=2))
@@ -315,8 +403,7 @@ def run_pipeline(
     # Save backward-compat aliases
     if result.critique:
         (run_dir / "critique.json").write_text(json.dumps(result.critique.model_dump(), indent=2))
-    if result.revised:
-        (run_dir / "revised.json").write_text(json.dumps(result.revised.model_dump(), indent=2))
+    (run_dir / "revised.json").write_text(json.dumps(final_revision.model_dump(), indent=2))
 
     _save_result(result)
     return result
@@ -362,13 +449,15 @@ def resume_pipeline_from_result(
             run_dir,
             on_model_done=on_image_done,
             reference_image_path=result.reference_image_path,
+            model_a=result.model_a_key,
+            model_b=result.model_b_key,
         )
         gpt_path = _existing_image_path(result.image_paths.get("gpt_image_2"), run_dir / "gpt_image_2.png")
         gemini_path = _existing_image_path(result.image_paths.get("gemini_3_pro"), run_dir / "gemini_3_pro.png")
         if isinstance(result.image_paths.get("gpt_image_2"), Exception):
-            result.errors.append(f"GPT Image-2 failed: {_format_exception(result.image_paths['gpt_image_2'])}")
+            result.errors.append(f"{result.model_a_label} failed: {_format_exception(result.image_paths['gpt_image_2'])}")
         if isinstance(result.image_paths.get("gemini_3_pro"), Exception):
-            result.errors.append(f"Gemini 3 Pro failed: {_format_exception(result.image_paths['gemini_3_pro'])}")
+            result.errors.append(f"{result.model_b_label} failed: {_format_exception(result.image_paths['gemini_3_pro'])}")
         if not gpt_path or not gemini_path:
             result.pipeline_status = "failed"
             result.requires_attention = True
@@ -381,7 +470,10 @@ def resume_pipeline_from_result(
     if not result.eval_a or not result.eval_b:
         notify("stage_evaluating")
         try:
-            result.eval_a, result.eval_b, result.prompt_difficulty = evaluate_images(result.prompt, gpt_path, gemini_path)
+            result.eval_a, result.eval_b, result.prompt_difficulty = evaluate_images(
+                result.prompt, gpt_path, gemini_path,
+                model_a_label=result.model_a_label, model_b_label=result.model_b_label,
+            )
             _persist_evaluation(run_dir, result)
         except Exception as e:
             result.errors.append(f"Evaluation failed: {e}")
@@ -410,7 +502,10 @@ def resume_pipeline_from_result(
             if round_num == 1:
                 notify("stage_critique")
                 try:
-                    crit = critique_evaluation(result.prompt, result.eval_a, result.eval_b, gpt_path, gemini_path)
+                    crit = critique_evaluation(
+                        result.prompt, result.eval_a, result.eval_b, gpt_path, gemini_path,
+                        model_a_label=result.model_a_label, model_b_label=result.model_b_label,
+                    )
                     result.critiques.append(crit)
                     (run_dir / "critique_r1.json").write_text(json.dumps(crit.model_dump(), indent=2))
                     _save_prompt_input_metadata(
@@ -435,6 +530,7 @@ def resume_pipeline_from_result(
                     crit = critique_evaluation_gemini(
                         result.prompt, prev_revised.model_a, prev_revised.model_b, gpt_path, gemini_path,
                         raw_output_path=run_dir / "critique_r2_raw.txt",
+                        model_a_label=result.model_a_label, model_b_label=result.model_b_label,
                     )
                     result.critiques.append(crit)
                     (run_dir / "critique_r2.json").write_text(json.dumps(crit.model_dump(), indent=2))
@@ -480,6 +576,7 @@ def resume_pipeline_from_result(
                 revision_input_b = result.eval_b if round_num == 1 else result.revisions[-1].model_b
                 rev = revise_evaluation(
                     result.prompt, revision_input_a, revision_input_b, result.critiques[-1], gpt_path, gemini_path,
+                    model_a_label=result.model_a_label, model_b_label=result.model_b_label,
                 )
                 result.revisions.append(rev)
                 (run_dir / f"revised_r{round_num}.json").write_text(json.dumps(rev.model_dump(), indent=2))
@@ -513,14 +610,18 @@ def resume_pipeline_from_result(
         return result
 
     notify("stage_complete")
-    result.comparison = determine_winner(result.prompt, result.eval_a, result.eval_b, result.revised)
+    final_revision = _final_revision(result)
+    result.comparison = determine_winner(
+        result.prompt, result.eval_a, result.eval_b, final_revision,
+        model_a_name=result.model_a_label, model_b_name=result.model_b_label,
+        arbitration=_gate1_arbitration(result),
+    )
     if result.pipeline_status == "partial":
         result.pipeline_status = "completed"
     (run_dir / "comparison.json").write_text(json.dumps(result.comparison.model_dump(), indent=2))
     if result.critique:
         (run_dir / "critique.json").write_text(json.dumps(result.critique.model_dump(), indent=2))
-    if result.revised:
-        (run_dir / "revised.json").write_text(json.dumps(result.revised.model_dump(), indent=2))
+    (run_dir / "revised.json").write_text(json.dumps(final_revision.model_dump(), indent=2))
     _save_result(result)
     return result
 
@@ -548,7 +649,9 @@ def _build_comparison_fallback(result: PipelineResult) -> None:
         )
         result.revisions = [fallback_revised]
         result.comparison = determine_winner(
-            result.prompt, result.eval_a, result.eval_b, fallback_revised
+            result.prompt, result.eval_a, result.eval_b, fallback_revised,
+            model_a_name=result.model_a_label, model_b_name=result.model_b_label,
+            arbitration=_gate1_arbitration(result),
         )
         if result.pipeline_status == "partial":
             result.pipeline_status = "completed"
@@ -625,6 +728,10 @@ def _save_result(result: PipelineResult) -> None:
         summary = {
             "prompt": result.prompt,
             "timestamp": result.timestamp,
+            "model_a_key": result.model_a_key,
+            "model_b_key": result.model_b_key,
+            "model_a_label": result.model_a_label,
+            "model_b_label": result.model_b_label,
             "errors": result.errors,
             "reference_image": result.reference_image_path.name if result.reference_image_path else None,
             "reference_image_source": result.reference_image_name,

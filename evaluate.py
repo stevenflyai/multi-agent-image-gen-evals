@@ -12,7 +12,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from config import EVAL_MODEL, LLM_MAX_TOKENS
-from prompts import EVAL_SYSTEM_PROMPT
+from prompts import eval_system_prompt, image_caption
 from schemas import ImageEvaluation, PromptDifficulty
 from utils import image_to_b64, parse_llm_json, retry_llm_call
 
@@ -23,8 +23,15 @@ def evaluate_images(
     prompt: str,
     image_a_path: Path,
     image_b_path: Path,
+    *,
+    model_a_label: str,
+    model_b_label: str,
 ) -> tuple[ImageEvaluation, ImageEvaluation, PromptDifficulty | None]:
     """Evaluate both images using Claude Opus.
+
+    Args:
+        model_a_label: Display label of the generator that produced image A.
+        model_b_label: Display label of the generator that produced image B.
 
     Returns (eval_model_a, eval_model_b, prompt_difficulty).
     """
@@ -41,7 +48,7 @@ def evaluate_images(
             "role": "user",
             "content": [
                 {"type": "text", "text": f'The prompt used to generate both images: "{prompt}"'},
-                {"type": "text", "text": "Image A (GPT Image-2):"},
+                {"type": "text", "text": image_caption("A", model_a_label)},
                 {
                     "type": "image",
                     "source": {
@@ -50,7 +57,7 @@ def evaluate_images(
                         "data": image_a_b64,
                     },
                 },
-                {"type": "text", "text": "Image B (Gemini 3 Pro):"},
+                {"type": "text", "text": image_caption("B", model_b_label)},
                 {
                     "type": "image",
                     "source": {
@@ -68,7 +75,7 @@ def evaluate_images(
         with client.messages.stream(
             model=EVAL_MODEL,
             max_tokens=LLM_MAX_TOKENS,
-            system=EVAL_SYSTEM_PROMPT,
+            system=eval_system_prompt(model_a_label, model_b_label),
             messages=messages,
         ) as stream:
             return stream.get_final_text()

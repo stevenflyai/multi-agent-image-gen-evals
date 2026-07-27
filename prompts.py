@@ -2,6 +2,10 @@
 
 Single source of truth for rubric text and system prompts used by
 evaluate.py, critique.py, and revise.py.
+
+Prompts that name the two image generators are built per run via
+`eval_system_prompt()` / `revise_system_prompt()`, so the judge is told the
+labels actually selected for slots A and B rather than hardcoded defaults.
 """
 
 RUBRIC = """Score each dimension as an integer from 1-10. Use the full scale consistently:
@@ -56,7 +60,14 @@ RUBRIC_COMPACT = """The evaluation used this 1-10 scale: 1-2=unusable/almost no 
 **Color accuracy**: prompt-specified colors, realistic material/skin colors, lighting/white balance, and palette harmony
 **Creativity**: original choices that enhance the prompt without violating its requirements"""
 
-EVAL_SYSTEM_PROMPT = f"""You are an expert image quality evaluator. You will be shown two AI-generated images (Image A from GPT Image-2, Image B from Gemini 3 Pro) created from the same prompt.
+def image_caption(slot: str, model_label: str) -> str:
+    """Caption for an image content block, e.g. "Image A (MAI-Image 2.5):"."""
+    return f"Image {slot} ({model_label}):"
+
+
+def eval_system_prompt(model_a_label: str, model_b_label: str) -> str:
+    """Initial evaluation prompt, naming the run's actual generators."""
+    return f"""You are an expert image quality evaluator. You will be shown two AI-generated images (Image A from {model_a_label}, Image B from {model_b_label}) created from the same prompt.
 
 Evaluate EACH image independently across 6 dimensions. Be precise and rigorous.
 
@@ -69,7 +80,7 @@ Return TWO evaluations as JSON — one for each model. Use this exact schema:
 {{
   "prompt_difficulty": "easy|medium|hard",
   "model_a": {{
-    "model_name": "GPT Image-2",
+    "model_name": "{model_a_label}",
     "prompt_adherence": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}},
     "photorealism": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}},
     "aesthetic_quality": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}},
@@ -78,7 +89,7 @@ Return TWO evaluations as JSON — one for each model. Use this exact schema:
     "creativity": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}}
   }},
   "model_b": {{
-    "model_name": "Gemini 3 Pro",
+    "model_name": "{model_b_label}",
     "prompt_adherence": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}},
     "photorealism": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}},
     "aesthetic_quality": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文..."}},
@@ -155,7 +166,9 @@ Return your critique as JSON with this exact schema:
 Include ALL 6 dimensions in dimension_critiques, even if you agree with the scores.
 Return ONLY valid JSON, no other text."""
 
-REVISE_SYSTEM_PROMPT = f"""You are an expert image quality evaluator performing a REVISED evaluation. You previously evaluated two images, and a reviewer has challenged some of your scores.
+def revise_system_prompt(model_a_label: str, model_b_label: str) -> str:
+    """Revision prompt, naming the run's actual generators."""
+    return f"""You are an expert image quality evaluator performing a REVISED evaluation. You previously evaluated two images, and a reviewer has challenged some of your scores.
 
 {RUBRIC_COMPACT}
 
@@ -169,7 +182,7 @@ Return JSON with this exact schema:
 
 {{
   "model_a": {{
-    "model_name": "GPT Image-2",
+    "model_name": "{model_a_label}",
     "prompt_adherence": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}},
     "photorealism": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}},
     "aesthetic_quality": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}},
@@ -178,7 +191,7 @@ Return JSON with this exact schema:
     "creativity": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}}
   }},
   "model_b": {{
-    "model_name": "Gemini 3 Pro",
+    "model_name": "{model_b_label}",
     "prompt_adherence": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}},
     "photorealism": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}},
     "aesthetic_quality": {{"score": N, "evidence": "Concrete visible evidence...", "confidence": N, "reasoning": "English...", "reasoning_zh": "中文...", "critique_accepted": true/false, "revision_note": "..."}},

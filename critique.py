@@ -1,4 +1,5 @@
-"""Critique of evaluation scores by GPT-5.4 (round 1) and Gemini 3.1 Pro (round 2).
+"""Critique of evaluation scores by the round-1 OpenAI critic (CRITIQUE_MODEL) and
+the round-2 Gemini critic (CRITIQUE_ROUND2_MODEL).
 
 Reviews evaluation for inconsistencies, unsupported reasoning,
 and potential bias. Returns dimension-level counterarguments.
@@ -12,10 +13,10 @@ from dotenv import load_dotenv
 from google import genai
 from openai import OpenAI
 
-from config import CRITIQUE_MODEL, CRITIQUE_ROUND2_MAX_TOKENS, CRITIQUE_ROUND2_MODEL, GEMINI_SAFETY_CATEGORIES, GEMINI_SAFETY_THRESHOLD, LLM_MAX_TOKENS
-from prompts import CRITIQUE_ROUND2_SYSTEM_PROMPT, CRITIQUE_SYSTEM_PROMPT
+from config import CRITIQUE_MAX_TOKENS, CRITIQUE_MODEL, CRITIQUE_ROUND2_MAX_TOKENS, CRITIQUE_ROUND2_MODEL, GEMINI_SAFETY_CATEGORIES, GEMINI_SAFETY_THRESHOLD
+from prompts import CRITIQUE_ROUND2_SYSTEM_PROMPT, CRITIQUE_SYSTEM_PROMPT, image_caption
 from schemas import CritiqueResponse, ImageEvaluation, RevisedImageEvaluation
-from utils import build_eval_summary, image_to_b64, parse_llm_json, retry_llm_call
+from utils import build_eval_summary, gemini_client, image_to_b64, parse_llm_json, retry_llm_call
 
 load_dotenv()
 
@@ -26,8 +27,11 @@ def critique_evaluation(
     eval_b: ImageEvaluation,
     image_a_path: Path,
     image_b_path: Path,
+    *,
+    model_a_label: str,
+    model_b_label: str,
 ) -> CritiqueResponse:
-    """GPT-5.4 reviews Claude Opus's evaluation (round 1)."""
+    """The round-1 OpenAI critic reviews Claude Opus's evaluation."""
     client = OpenAI(
         api_key=os.environ["OPENAI_API_KEY"],
         base_url=os.environ.get("OPENAI_BASE_URL"),
@@ -38,33 +42,29 @@ def critique_evaluation(
     eval_summary = build_eval_summary(eval_a, eval_b)
 
     def _call() -> str:
-        response = client.chat.completions.create(
+        # Uses the Responses API so reasoning/"pro" critics (e.g. gpt-5.4-pro,
+        # which is not served via chat.completions) work alongside standard models.
+        response = client.responses.create(
             model=CRITIQUE_MODEL,
-            max_completion_tokens=LLM_MAX_TOKENS,
-            messages=[
-                {"role": "system", "content": CRITIQUE_SYSTEM_PROMPT},
+            instructions=CRITIQUE_SYSTEM_PROMPT,
+            max_output_tokens=CRITIQUE_MAX_TOKENS,
+            input=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f'Prompt: "{prompt}"\n\nClaude Opus evaluation:\n{eval_summary}'},
-                        {"type": "text", "text": "Image A (GPT Image-2):"},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{media_a};base64,{image_a_b64}"},
-                        },
-                        {"type": "text", "text": "Image B (Gemini 3 Pro):"},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{media_b};base64,{image_b_b64}"},
-                        },
-                        {"type": "text", "text": "Review this evaluation. Return JSON only."},
+                        {"type": "input_text", "text": f'Prompt: "{prompt}"\n\nClaude Opus evaluation:\n{eval_summary}'},
+                        {"type": "input_text", "text": image_caption("A", model_a_label)},
+                        {"type": "input_image", "image_url": f"data:{media_a};base64,{image_a_b64}"},
+                        {"type": "input_text", "text": image_caption("B", model_b_label)},
+                        {"type": "input_image", "image_url": f"data:{media_b};base64,{image_b_b64}"},
+                        {"type": "input_text", "text": "Review this evaluation. Return JSON only."},
                     ],
                 },
             ],
         )
-        content = response.choices[0].message.content
-        if content is None:
-            raise ValueError(f"OpenAI returned empty content (finish_reason: {response.choices[0].finish_reason})")
+        content = response.output_text
+        if not content:
+            raise ValueError(f"OpenAI returned empty content ({_openai_response_details(response)})")
         return content
 
     data = retry_llm_call(lambda: parse_llm_json(_call()))
@@ -78,9 +78,12 @@ def critique_evaluation_gemini(
     image_a_path: Path,
     image_b_path: Path,
     raw_output_path: Path | None = None,
+    *,
+    model_a_label: str,
+    model_b_label: str,
 ) -> CritiqueResponse:
-    """Gemini 3.1 Pro reviews revised evaluation (round 2) via Vertex AI."""
-    client = genai.Client(vertexai=True, api_key=os.environ["GOOGLE_API_KEY"])
+    """The round-2 Gemini critic reviews the revised evaluation."""
+    client = gemini_client()
 
     image_a_b64, media_a = image_to_b64(image_a_path)
     image_b_b64, media_b = image_to_b64(image_b_path)
@@ -106,9 +109,9 @@ def critique_evaluation_gemini(
             model=CRITIQUE_ROUND2_MODEL,
             contents=[
                 user_text,
-                "Image A (GPT Image-2):",
+                image_caption("A", model_a_label),
                 image_a_part,
-                "Image B (Gemini 3 Pro):",
+                image_caption("B", model_b_label),
                 image_b_part,
             ],
             config=genai.types.GenerateContentConfig(
@@ -141,6 +144,35 @@ def critique_evaluation_gemini(
 
     data = retry_llm_call(_call_and_parse)
     return CritiqueResponse(round=2, critic_model=CRITIQUE_ROUND2_MODEL, **data)
+
+
+def _openai_response_details(response: object) -> str:
+    """Extract useful diagnostics from an empty OpenAI Responses API result.
+
+    A reasoning critic that exhausts max_output_tokens before emitting its message
+    returns status="incomplete" with empty output_text, so surface the token
+    breakdown that explains it rather than just the bare status.
+    """
+    details: list[str] = [f"status={getattr(response, 'status', 'unknown')}"]
+
+    incomplete = getattr(response, "incomplete_details", None)
+    reason = getattr(incomplete, "reason", None)
+    if reason:
+        details.append(f"incomplete_reason={reason}")
+
+    usage = getattr(response, "usage", None)
+    if usage:
+        output_tokens = getattr(usage, "output_tokens", None)
+        if output_tokens is not None:
+            details.append(f"output_tokens={output_tokens}")
+        reasoning_tokens = getattr(getattr(usage, "output_tokens_details", None), "reasoning_tokens", None)
+        if reasoning_tokens is not None:
+            details.append(f"reasoning_tokens={reasoning_tokens}")
+
+    if reason == "max_output_tokens":
+        details.append(f"budget exhausted before any text was emitted; raise CRITIQUE_MAX_TOKENS (currently {CRITIQUE_MAX_TOKENS})")
+
+    return "; ".join(details)
 
 
 def _gemini_safety_settings() -> list[genai.types.SafetySetting]:

@@ -1,23 +1,38 @@
-"""Shared utilities: image encoding, LLM retry, and JSON parsing."""
+"""Shared utilities: image encoding, LLM retry, JSON parsing, and the Gemini client."""
 
 import base64
 import functools
 import io
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
 from typing import Callable, TypeVar, Union
 
 from PIL import Image
+from google import genai
 
-from config import IMAGE_MAX_SIZE, IMAGE_QUALITY, MAX_RETRIES, RETRY_BACKOFF
+from config import GEMINI_USE_VERTEX, IMAGE_MAX_SIZE, IMAGE_QUALITY, MAX_RETRIES, RETRY_BACKOFF
 from schemas import DIMENSIONS, ImageEvaluation, RevisedImageEvaluation
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+def gemini_client() -> genai.Client:
+    """Build the Gemini client both the generator and the round-2 critic use.
+
+    Shared so the endpoint choice cannot drift between the two call sites — the
+    404 that motivated this lived in exactly that gap: generation and critique
+    constructed their own clients, so only one of them broke visibly.
+    """
+    api_key = os.environ["GOOGLE_API_KEY"]
+    if GEMINI_USE_VERTEX:
+        return genai.Client(vertexai=True, api_key=api_key)
+    return genai.Client(api_key=api_key)
 
 
 @functools.lru_cache(maxsize=32)

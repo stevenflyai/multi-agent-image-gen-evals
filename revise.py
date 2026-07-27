@@ -13,7 +13,7 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from config import EVAL_MODEL, LLM_MAX_TOKENS
-from prompts import REVISE_SYSTEM_PROMPT
+from prompts import image_caption, revise_system_prompt
 from schemas import CritiqueResponse, ImageEvaluation, RevisedEvaluation, RevisedImageEvaluation
 from utils import build_eval_summary, image_to_b64, parse_llm_json, retry_llm_call
 
@@ -27,6 +27,9 @@ def revise_evaluation(
     critique: CritiqueResponse,
     image_a_path: Path,
     image_b_path: Path,
+    *,
+    model_a_label: str,
+    model_b_label: str,
 ) -> RevisedEvaluation:
     """Claude Opus revises evaluation considering a reviewer's critique."""
     client = Anthropic(
@@ -46,7 +49,7 @@ def revise_evaluation(
         with client.messages.stream(
             model=EVAL_MODEL,
             max_tokens=LLM_MAX_TOKENS,
-            system=REVISE_SYSTEM_PROMPT,
+            system=revise_system_prompt(model_a_label, model_b_label),
             messages=[
                 {
                     "role": "user",
@@ -55,7 +58,7 @@ def revise_evaluation(
                             "type": "text",
                             "text": f'Prompt: "{prompt}"\n\nYour original evaluation:\n{original_eval}\n\n{reviewer_name} reviewer critique:\n{critique_summary}',
                         },
-                        {"type": "text", "text": "Image A (GPT Image-2):"},
+                        {"type": "text", "text": image_caption("A", model_a_label)},
                         {
                             "type": "image",
                             "source": {
@@ -64,7 +67,7 @@ def revise_evaluation(
                                 "data": image_a_b64,
                             },
                         },
-                        {"type": "text", "text": "Image B (Gemini 3 Pro):"},
+                        {"type": "text", "text": image_caption("B", model_b_label)},
                         {
                             "type": "image",
                             "source": {
